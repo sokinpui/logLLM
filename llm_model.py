@@ -1,9 +1,14 @@
+import tiktoken
+import os
+from vertexai.preview import tokenization
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from vertexai.preview import tokenization
-import tiktoken
-from pydantic import BaseModel, Field
-import os
+
+from langchain_community.llms import LlamaCpp
+from langchain_core.callbacks import CallbackManager, StreamingStdOutCallbackHandler
+from langchain_ollama import OllamaEmbeddings
+from llama_cpp import Llama
+from contextlib import redirect_stdout, redirect_stderr
 
 import config as cfg
 from logger import Logger
@@ -74,14 +79,54 @@ class GeminiModel(LLMModel):
         result = tokenizer.count_tokens(prompt)
         return result.total_tokens
 
+class QwenModel(LLMModel):
+    def __init__(self):
+        super().__init__()
+        path = "./models/qwen/qwen2.5-7b-instruct-1m-q4_k_m.gguf"
+        self.n_gpu_layers = -1
+        self.n_batch = 512
 
+        self.context_size = 128000
+
+
+        with open(os.devnull, 'w') as f, redirect_stdout(f), redirect_stderr(f):
+            self.model = LlamaCpp(
+                    model_path=path,
+                    n_gpu_layers=self.n_gpu_layers,
+                    n_batch=self.n_batch,
+                    callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]),
+                    verbose=False
+                    )
+
+            # set the embedding model
+            self._llm_raw = Llama(model_path=path, n_ctx=self.context_size, verbose=False)
+            self.embedding = OllamaEmbeddings(model="qwen2.5")
+
+    def token_count(self, text: str | None) -> int:
+        if text is None:
+            return 0
+
+        tokens = self._llm_raw.tokenize(text.encode("utf-8"))
+        return len(tokens)
+
+    def generate(self, prompt, schema=None):
+        if schema:
+            model = self.model.with_structured_output(schema)
+            structured_output = model.invoke(prompt)
+            return structured_output
+
+        return self.model.invoke(prompt)
 
 
 def main():
     # test the Gemini model
-    model = GeminiModel()
+    model = QwenModel()
     prompt = "What is the capital of France?"
     print(f"token count: {model.token_count(prompt)}")
+    print(model.model.invoke(prompt))
+
+    prompt2 = "What is the capital of Germany?"
+    print(model.generate(prompt2))
 
 if __name__ == "__main__":
     main()
