@@ -22,14 +22,14 @@ class ReasoningAgent(Agent):
         # self._build_graph()
         # self.graph = self.workflow.compile()
 
-    def run(self, state: State) -> State:
+    def run(self, state: State | dict | None) -> State:
         """
         run the agent synchronously with `invoke` method
         """
         state = self.graph.invoke(state)
         return state
 
-    async def arun(self, state: State) -> State:
+    async def arun(self, state: State | dict | None) -> State:
         """
         run the agent asynchronously with `invoke` method
         """
@@ -37,7 +37,6 @@ class ReasoningAgent(Agent):
         return state
 
     def _build_graph(self):
-        self.workflow.add_node("get_prompt", self.get_prompt)
         self.workflow.add_node("parse_input", self.parse_input)
         self.workflow.add_node("context_understanding", self.context_understanding)
         self.workflow.add_node("determine_goal", self.determine_goal)
@@ -46,13 +45,44 @@ class ReasoningAgent(Agent):
         self.workflow.add_node("combine_sub_answer", self.combine_sub_answer)
         self.workflow.add_node("formulate_response", self.formulate_response)
 
-        self.workflow.add_edge(START, "parse_input")
+        self.workflow.add_conditional_edges(
+                START,
+                self.is_question,
+                {
+                    True: "parse_input",
+                    False: END
+
+                }
+        )
+
+        self.workflow.add_edge("parse_input", "context_understanding")
+        self.workflow.add_edge("context_understanding", "determine_goal")
+        self.workflow.add_edge("determine_goal", "decompose_question")
+
+        self.workflow.add_edge("decompose_question", "solve_sub_question")
+
+        self.workflow.add_conditional_edges(
+                "solve_sub_question",
+                self.is_sub_question_empty,
+                {
+                    False: "solve_sub_question",
+                    True: "combine_sub_answer"
+                }
+        )
+        self.workflow.add_edge("combine_sub_answer", "formulate_response")
+        self.workflow.add_edge("formulate_response", END)
 
     def get_prompt(self, state: State) -> State | dict:
         return state
 
     def is_question(self, state: State) -> bool:
+        """
+        determine if the user input is a question
 
+        Output:
+            True: if the input is a question, or can be converted into a question
+            False: cannot be converted into a question
+        """
         original_prompt = state["original_prompt"]
 
         sound = f"""
@@ -83,6 +113,9 @@ class ReasoningAgent(Agent):
         return response.is_question
 
     def parse_input(self, state: State) -> State | dict:
+        """
+        convert the user input into a question
+        """
 
         original_prompt = state["original_prompt"]
 
@@ -400,4 +433,11 @@ def main():
         "original_prompt": "How do I bake a cake?",
     }
 
+    response = reasoning_agent.run(state)
 
+    import pprint
+
+    pprint.pprint(response)
+
+if __name__ == "__main__":
+    main()
