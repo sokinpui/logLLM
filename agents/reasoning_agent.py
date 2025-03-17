@@ -22,14 +22,14 @@ class ReasoningAgent(Agent):
         # self._build_graph()
         # self.graph = self.workflow.compile()
 
-    def run(self, state: State | dict | None) -> State:
+    def run(self, state: State) -> State:
         """
         run the agent synchronously with `invoke` method
         """
         state = self.graph.invoke(state)
         return state
 
-    async def arun(self, state: State | dict | None) -> State:
+    async def arun(self, state: State) -> State:
         """
         run the agent asynchronously with `invoke` method
         """
