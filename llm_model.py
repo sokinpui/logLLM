@@ -80,10 +80,13 @@ class GeminiModel(LLMModel):
         return result.total_tokens
 
     def generate(self, prompt, schema=None):
-        super().generate(prompt, schema)
+        result = super().generate(prompt, schema)
 
         import time
         time.sleep(5)
+
+        return result
+
 
 
 class QwenModel(LLMModel):
@@ -123,7 +126,6 @@ class QwenModel(LLMModel):
             return structured_output
 
         return self.model.invoke(prompt)
-
 
 def main():
     # test the Gemini model
