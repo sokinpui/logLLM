@@ -1,5 +1,6 @@
 from typing import List, Annotated, TypedDict
 from langgraph.graph import StateGraph, START, END
+from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel, Field
 
 from .agent_abc import Agent, add_string_message
@@ -16,12 +17,9 @@ class State(TypedDict):
     final_response: str
 
 class ReasoningAgent(Agent):
-    def __init__(self, model : LLMModel):
+    def __init__(self, model : LLMModel, typed_state):
         self._model = model
-
-        self.workflow = StateGraph(State)
-        self._build_graph()
-        self.graph = self.workflow.compile()
+        self.graph = self._build_graph(typed_state)
 
     def run(self, state: State) -> State:
         """
@@ -37,18 +35,19 @@ class ReasoningAgent(Agent):
         state = await self.graph.ainvoke(state)
         return state
 
-    def _build_graph(self):
-        self.workflow.add_node("parse_input", self.parse_input)
-        self.workflow.add_node("context_understanding", self.context_understanding)
-        self.workflow.add_node("determine_goal", self.determine_goal)
-        self.workflow.add_node("decompose_question", self.decompose_question)
-        self.workflow.add_node("solve_sub_question", self.solve_sub_question)
-        self.workflow.add_node("combine_sub_answer", self.combine_sub_answer)
-        self.workflow.add_node("formulate_response", self.formulate_response)
+    def _build_graph(self, typed_state) -> CompiledStateGraph:
+        workflow = StateGraph(typed_state)
+        workflow.add_node("parse_input", self.parse_input)
+        workflow.add_node("context_understanding", self.context_understanding)
+        workflow.add_node("determine_goal", self.determine_goal)
+        workflow.add_node("decompose_question", self.decompose_question)
+        workflow.add_node("solve_sub_question", self.solve_sub_question)
+        workflow.add_node("combine_sub_answer", self.combine_sub_answer)
+        workflow.add_node("formulate_response", self.formulate_response)
 
-        self.workflow.add_conditional_edges(
-                START,
-                self.is_question,
+        workflow.add_conditional_edges(
+               START,
+               self.is_question,
                 {
                     True: "parse_input",
                     False: END
@@ -56,13 +55,13 @@ class ReasoningAgent(Agent):
                 }
         )
 
-        self.workflow.add_edge("parse_input", "context_understanding")
-        self.workflow.add_edge("context_understanding", "determine_goal")
-        self.workflow.add_edge("determine_goal", "decompose_question")
+        workflow.add_edge("parse_input", "context_understanding")
+        workflow.add_edge("context_understanding", "determine_goal")
+        workflow.add_edge("determine_goal", "decompose_question")
 
-        self.workflow.add_edge("decompose_question", "solve_sub_question")
+        workflow.add_edge("decompose_question", "solve_sub_question")
 
-        self.workflow.add_conditional_edges(
+        workflow.add_conditional_edges(
                 "solve_sub_question",
                 self.is_sub_question_empty,
                 {
@@ -70,8 +69,12 @@ class ReasoningAgent(Agent):
                     True: "combine_sub_answer"
                 }
         )
-        self.workflow.add_edge("combine_sub_answer", "formulate_response")
-        self.workflow.add_edge("formulate_response", END)
+        workflow.add_edge("combine_sub_answer", "formulate_response")
+        workflow.add_edge("formulate_response", END)
+
+        graph = workflow.compile()
+
+        return graph
 
     def get_prompt(self, state: State) -> State | dict:
         return state
@@ -371,15 +374,13 @@ def main():
 
     model = GeminiModel()
 
-    reasoning_agent = ReasoningAgent(model)
+    reasoning_agent = ReasoningAgent(model, State)
 
     state = {
         "original_prompt": "I want to check if a IP address in the log ssh.log show that it try attempt to login multiple times failure",
     }
 
-
     response = reasoning_agent.run(state)
-
     import json
     with open("./result.json", "w") as f:
         json.dump(response, f, indent=4)

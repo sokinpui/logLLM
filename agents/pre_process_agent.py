@@ -1,4 +1,5 @@
 from langgraph.graph import StateGraph, END, START
+from langgraph.graph.state import CompiledStateGraph
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from typing import TypedDict, List, Annotated
@@ -24,12 +25,10 @@ class PreProcessAgentState(TypedDict):
     route_back: bool
 
 class PreProcessAgent(Agent):
-    def __init__(self,  model: LLMModel, rag: RAGManager, db: ElasticsearchDatabase, state_dict=PreProcessAgentState):
+    def __init__(self,  model: LLMModel, rag: RAGManager, db: ElasticsearchDatabase, typed_state):
         self.model = model
 
-        self.workflow = StateGraph(state_dict)
-        self._build_graph()
-        self.graph = self.workflow.compile()
+        self.graph = self._build_graph(typed_state)
 
         self._rag = rag
         self._db = db
@@ -49,23 +48,28 @@ class PreProcessAgent(Agent):
         state = await self.graph.ainvoke(state)
         return state
 
-    def _build_graph(self):
-        self.workflow.add_node("node1", self.interpre_event)
-        self.workflow.add_node("node2", self.gen_search_query)
-        self.workflow.add_node("db_search", self.search_in_db)
-        self.workflow.add_node("node4", self.search_feedback)
+    def _build_graph(self, typed_state) -> CompiledStateGraph:
+        workflow = StateGraph(typed_state)
 
-        self.workflow.add_edge(START, "node1")
-        self.workflow.add_edge("node1", "node2")
-        self.workflow.add_edge("node2", "db_search")
-        self.workflow.add_edge("db_search", "node4")
-        self.workflow.add_conditional_edges("node4",
+        workflow.add_node("node1", self.interpre_event)
+        workflow.add_node("node2", self.gen_search_query)
+        workflow.add_node("db_search", self.search_in_db)
+        workflow.add_node("node4", self.search_feedback)
+
+        workflow.add_edge(START, "node1")
+        workflow.add_edge("node1", "node2")
+        workflow.add_edge("node2", "db_search")
+        workflow.add_edge("db_search", "node4")
+        workflow.add_conditional_edges("node4",
             lambda state: "refine_search" if state["route_back"] else "proceed_to_next",
                 {
                     "refine_search": "node2",
                     "proceed_to_next": END
                 }
         )
+
+        graph = workflow.compile()
+        return graph
 
     def _list_to_indices(self, apps: List[str]) -> str:
         return ",".join(f"log_{app}" for app in apps)
@@ -191,7 +195,7 @@ def main():
 
     e1 = Event(description="Is IP address 185.165.29.69 keep attempting to login as Invalid user via ssh")
 
-    agent = PreProcessAgent(model=model, rag=sys_info, db=es_db)
+    agent = PreProcessAgent(model=model, rag=sys_info, db=es_db, typed_state=PreProcessAgentState)
 
     state = {
         "working_event": e1,

@@ -1,4 +1,5 @@
 from langgraph.graph import StateGraph, END, START
+from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel, Field
 from typing import TypedDict, Annotated, List
 
@@ -20,20 +21,15 @@ class LinearAnalyzeAgentState(TypedDict):
 
 
 class LinearAnalyzeAgent(Agent):
-    def __init__(self, model : LLMModel, db : ElasticsearchDatabase,
-                 state_dict=LinearAnalyzeAgentState):
+    def __init__(self, model : LLMModel, db : ElasticsearchDatabase, typed_state):
 
         self._model = model
-
-        self.workflow = StateGraph(state_dict)
-        self._build_graph()
-        self.graph = self.workflow.compile()
+        self.graph = self._build_graph(typed_state)
 
         self._db = db
         self._logger = Logger()
 
         self._memory_size = cfg.MEMRORY_TOKENS_LIMIT
-
         self._chunk_manager: ESTextChunkManager
 
     def run(self, state: LinearAnalyzeAgentState) -> LinearAnalyzeAgentState:
@@ -50,21 +46,20 @@ class LinearAnalyzeAgent(Agent):
         state = await self.graph.ainvoke(state)
         return state
 
-    def _build_graph(self):
-        if self.workflow is None:
-            raise ValueError("The workflow is not initialized")
+    def _build_graph(self, typed_state) -> CompiledStateGraph:
+        workflow = StateGraph(typed_state)
 
-        self.workflow.add_node("setup", self.setup_working_file)
-        self.workflow.add_node("get_chunk", self.get_chunk)
-        self.workflow.add_node("chunk_analysis", self.chunk_analysis)
-        self.workflow.add_node("memorize", self.memorize)
-        self.workflow.add_node("pop_file_id", self.pop_file_id)
+        workflow.add_node("setup", self.setup_working_file)
+        workflow.add_node("get_chunk", self.get_chunk)
+        workflow.add_node("chunk_analysis", self.chunk_analysis)
+        workflow.add_node("memorize", self.memorize)
+        workflow.add_node("pop_file_id", self.pop_file_id)
 
-        self.workflow.add_edge(START, "setup")
-        self.workflow.add_edge("setup", "get_chunk")
-        self.workflow.add_edge("get_chunk", "chunk_analysis")
-        self.workflow.add_edge("chunk_analysis", "memorize")
-        self.workflow.add_conditional_edges(
+        workflow.add_edge(START, "setup")
+        workflow.add_edge("setup", "get_chunk")
+        workflow.add_edge("get_chunk", "chunk_analysis")
+        workflow.add_edge("chunk_analysis", "memorize")
+        workflow.add_conditional_edges(
             "memorize",
             self.is_working_file_done,
             {
@@ -72,7 +67,7 @@ class LinearAnalyzeAgent(Agent):
                 False: "get_chunk"
             }
         )
-        self.workflow.add_conditional_edges(
+        workflow.add_conditional_edges(
             "pop_file_id",
             self.is_done,
             {
@@ -80,6 +75,9 @@ class LinearAnalyzeAgent(Agent):
                 False: "setup"
             }
         )
+
+        graph = workflow.compile()
+        return graph
 
     def is_done(self, state: LinearAnalyzeAgentState):
         """
@@ -187,7 +185,7 @@ def main():
     from llm_model import GeminiModel
     db = ElasticsearchDatabase()
     model = GeminiModel()
-    agent = LinearAnalyzeAgent(model, db)
+    agent = LinearAnalyzeAgent(model, db, LinearAnalyzeAgentState)
 
     state = {
         "working_event": Event("asdfasdfsd"),
