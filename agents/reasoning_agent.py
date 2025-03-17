@@ -12,6 +12,7 @@ class State(TypedDict):
     context: str
     goal: str
     sub_questions: List[str]
+    processed_sub_questions: Annotated[List[str], add_string_message]
     final_response: str
 
 class ReasoningAgent(Agent):
@@ -83,10 +84,14 @@ class ReasoningAgent(Agent):
             True: if the input is a question, or can be converted into a question
             False: cannot be converted into a question
         """
+
         original_prompt = state["original_prompt"]
 
         sound = f"""
-**Task**: Determine if the user input can be converted into a question. Follow these steps:
+## The Given prompt
+{original_prompt}
+
+**Task**: Determine if the given prompt can be converted into a question. Follow these steps:
 
 1. **Evaluate Input Type**:
    - Check if the input is already a question (e.g., starts with "What," "How," "Why," etc.).
@@ -102,7 +107,6 @@ class ReasoningAgent(Agent):
         - if it can be converted to a question: answer yes
         - if it cannot be converted to a question: answer no
 
-**User Input**: "{original_prompt}"
         """
 
         class Schema(BaseModel):
@@ -120,7 +124,10 @@ class ReasoningAgent(Agent):
         original_prompt = state["original_prompt"]
 
         sound = f"""
-**Task**: Determine if the user input can be converted into a question. If yes, rewrite it as a clear and actionable question. Follow these steps:
+## The given prompt
+{original_prompt}
+
+**Task**: Determine if the given prompt can be converted into a question. If yes, rewrite it as a clear and actionable question. Follow these steps:
 
 1. **Evaluate Input Type**:
    - Check if the input is already a question (e.g., starts with "What," "How," "Why," etc.).
@@ -136,24 +143,6 @@ class ReasoningAgent(Agent):
 
 4. **Output Format**:
    - **Converted Question**: [If applicable, the rewritten question]
-
-**Example**:
-**User Input**: "Tell me about blockchain."
-- **Is Question?**: No.
-- **Converted Question**: "What is blockchain, and how does it work?"
-- **Notes**: The input implies a request for information, which can be converted into a question.
-
-**User Input**: "How does blockchain work?"
-- **Is Question?**: Yes.
-- **Converted Question**: [No conversion needed]
-- **Notes**: The input is already a question.
-
-**User Input**: "It’s cold here."
-- **Is Question?**: No.
-- **Converted Question**: "Can you adjust the temperature?"
-- **Notes**: The input implies a request for action, which can be converted into a question.
-
-**User Input**: "{original_prompt}"
         """
 
         question = self._model.generate(sound)
@@ -166,7 +155,10 @@ class ReasoningAgent(Agent):
         question = state["question"]
 
         sound = f"""
-**Task**: Analyze the following user prompt to extract its context, domain, and potential ambiguities. Follow these steps:
+## The given Question
+{question}
+
+**Task**: Analyze the given question to extract its context, domain, and potential ambiguities. Follow these steps:
 
 1. **Identify Explicit Context**:
    - Use the "5 Ws" (Who, What, Where, When, Why/How) to list explicit details.
@@ -190,20 +182,6 @@ class ReasoningAgent(Agent):
 - **Ambiguities**: [Term + possible meanings/clarifications]
 - **Assumptions**: [List of assumptions to proceed]
 
-**Example**:
-**User Prompt**: "Explain how blockchain works for supply chains."
-- **Explicit Context**:
-  - What: Blockchain technology.
-  - How: Functionality in supply chains.
-- **Domain**: Technology (Blockchain), Logistics.
-- **Ambiguities**:
-  - "Works": Clarify depth (technical vs. high-level).
-  - "Supply chains": Specific industry? (Assume retail).
-- **Assumptions**:
-  - User seeks a non-technical explanation.
-  - Focus on transparency/tracking use cases.
-
-  **User Prompt**:  "{question}"
         """
 
         context = self._model.generate(sound)
@@ -214,11 +192,13 @@ class ReasoningAgent(Agent):
 
     def determine_goal(self, state: State) -> State | dict:
 
-        context = state["context"]
         question = state["question"]
 
         sound = f"""
-        **Task**: Analyze the following user prompt to determine its goal and the type of response required. Follow these steps:
+## The given question
+{question}
+
+**Task**: Analyze the given question to determine its goal and the type of response required. Follow these steps:
 
 1. **Categorize Question Type**:
    - Classify the question into one or more of the following types:
@@ -241,28 +221,6 @@ class ReasoningAgent(Agent):
 3. **Clarify Goal**:
    - Identify the user’s underlying goal (e.g., "Why is the sky blue?" → Understand light scattering).
    - If the goal is unclear, propose 1–2 clarifying questions.
-
-4. **Output Format**:
-   - **Question Type**: [Type(s) of question]
-   - **Response Structure**: [Structure of the answer]
-   - **User Goal**: [Underlying goal or intent]
-   - **Clarifying Questions**: [If needed, list questions to refine the goal]
-
-**Example**:
-**User Prompt**: "How do I bake a cake?"
-- **Question Type**: Procedural.
-- **Response Structure**: Step-by-step instructions.
-- **User Goal**: Learn how to bake a cake from scratch.
-- **Clarifying Questions**: None.
-
-**User Prompt**: "What’s better: electric cars or gas cars?"
-- **Question Type**: Comparative, Opinion-based.
-- **Response Structure**: Point-by-point comparison with pros/cons.
-- **User Goal**: Decide which type of car to buy.
-- **Clarifying Questions**:
-  - Are you looking for cost, environmental impact, or performance comparisons?
-
-**User Prompt**: "{question}"
         """
 
         goal = self._model.generate(sound)
@@ -275,18 +233,18 @@ class ReasoningAgent(Agent):
 
         context = state["context"]
         question = state["question"]
-        goal = state["goal"]
 
         sound = f"""
-        **Task**: Break down the following question into smaller, logically connected sub-questions. Use the provided context to guide the decomposition process. Follow these steps:
+## The given Question
+{question}
+
+## Context
+{context}
+
+**Task**: Break down the given question into smaller, logically connected sub-questions. Use the provided context to guide the decomposition process. Follow these steps:
 
 1. **Review Context**:
-   - **Explicit Context**: {context}
    - Use this context to ensure the decomposition aligns with the user’s intent and domain.
-
-2. **Identify Key Components**:
-   - Extract the main components of the question (e.g., subjects, actions, relationships).
-   - Example: "How does blockchain improve supply chain transparency?" → Components: Blockchain, Supply Chain, Transparency.
 
 3. **Decompose into Sub-Questions**:
    - Use logical reasoning to split the question into smaller, answerable sub-questions.
@@ -299,25 +257,6 @@ class ReasoningAgent(Agent):
    - Arrange sub-questions in a logical sequence (e.g., foundational → advanced).
    - Ensure each sub-question is necessary to answer the main question.
 
-5. **Output Format**:
-   - **Main Question**: [Original question]
-   - **Key Components**: [List of main components]
-   - **Sub-Questions**: [List of sub-questions in logical order]
-
-**Example**:
-**Main Question**: "How does blockchain improve supply chain transparency?"
-- **Context**:
-  - **Explicit Context**: What: Blockchain technology. How: Functionality in supply chains.
-  - **Domain**: Technology (Blockchain), Logistics.
-  - **Assumptions**: User seeks a non-technical explanation. Focus on transparency/tracking use cases.
-- **Key Components**: Blockchain, Supply Chain, Transparency.
-- **Sub-Questions**:
-  1. What is blockchain, and how does it work?
-  2. What are the key challenges in supply chain transparency?
-  3. How does blockchain address these challenges?
-  4. What are real-world examples of blockchain improving supply chain transparency?
-
-**Main Question**: "{question}"
         """
 
         class Schema(BaseModel):
@@ -337,17 +276,16 @@ class ReasoningAgent(Agent):
         context = state["context"]
 
         sound = f"""
-**Task**: Answer the following sub-question based on the provided context, goal, and assumptions. Follow these steps:
+## sub question:
+{sub_question}
 
-1. **Review Context and Goal**:
-    - **Explicit Context**: {context}
+**Task**: Answer the given sub-question based on the provided context, goal, and assumptions. Follow these steps:
 
 2. **Answer the Sub-Question**:
    - Provide a concise and accurate answer to the sub-question.
    - Use trusted knowledge sources or logical reasoning.
    - If the answer requires assumptions, state them explicitly.
 
-**Sub-Question**: "{sub_question}"
         """
 
         response = self._model.generate(sound)
@@ -357,7 +295,8 @@ class ReasoningAgent(Agent):
             }
 
     def is_sub_question_empty(self, state: State) -> bool:
-        state["sub_questions"].pop(0)
+        sub_question = state["sub_questions"].pop(0)
+        state["processed_sub_questions"].append(sub_question)
         return len(state["sub_questions"]) == 0
 
     def combine_sub_answer(self, state: State) -> State | dict:
@@ -366,11 +305,15 @@ class ReasoningAgent(Agent):
         context = state["context"]
 
         sound = f"""
+## Goal:
+{goal}
+
+## context:
+{context}
+
 **Task**: Combine the following sub-answers into a single, coherent response to the main question. Follow these steps:
 
 1. **Review Context and Goal**:
-   - **Context**: {context}
-   - **Goal**: {goal}
 
 2. **Organize Sub-Answers**:
    - Arrange the sub-answers in a logical sequence that builds toward answering the main question.
@@ -397,6 +340,9 @@ class ReasoningAgent(Agent):
         combined_answer = state["messages"][-1]
 
         sound = f"""
+## synthesized sub-answers:
+{combined_answer}
+
 **Task**: Formulate a final response based on the synthesized sub-answers. Follow these steps:
 
 2. **Structure the Response**:
@@ -412,7 +358,6 @@ class ReasoningAgent(Agent):
    - Ensure the response addresses all parts of the main question.
    - Check for clarity, conciseness, and logical flow.
 
-**Synthesized Answer**: {combined_answer}
 """
 
         response = self._model.generate(sound)
@@ -420,7 +365,6 @@ class ReasoningAgent(Agent):
         return {
             "final_response": response
         }
-
 
 def main():
     from llm_model import GeminiModel
@@ -430,7 +374,7 @@ def main():
     reasoning_agent = ReasoningAgent(model)
 
     state = {
-        "original_prompt": "How do I bake a cake?",
+        "original_prompt": "I want to check if a IP address in the log ssh.log show that it try attempt to login multiple times failure",
     }
 
     response = reasoning_agent.run(state)
