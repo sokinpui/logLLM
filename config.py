@@ -80,7 +80,8 @@ INDEX_VECTOR_STORE = "vector_store"
 # LLM model
 # ==========================
 # gemini model
-GEMINI_LLM_MODEL = "gemini-2.0-flash"
+# GEMINI_LLM_MODEL = "gemini-2.0-flash"
+GEMINI_LLM_MODEL = "gemini-2.0-flash-lite"
 # GEMINI_LLM_MODEL = "gemini-1.5-flash-8b"
 
 # ==========================
