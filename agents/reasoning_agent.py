@@ -19,8 +19,8 @@ class ReasoningAgent(Agent):
         self._model = model
 
         self.workflow = StateGraph(State)
-        # self._build_graph()
-        # self.graph = self.workflow.compile()
+        self._build_graph()
+        self.graph = self.workflow.compile()
 
     def run(self, state: State) -> State:
         """
@@ -435,9 +435,9 @@ def main():
 
     response = reasoning_agent.run(state)
 
-    import pprint
-
-    pprint.pprint(response)
+    import json
+    with open("./result.json", "w") as f:
+        json.dump(response, f, indent=4)
 
 if __name__ == "__main__":
     main()
