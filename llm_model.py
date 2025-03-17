@@ -79,6 +79,13 @@ class GeminiModel(LLMModel):
         result = tokenizer.count_tokens(prompt)
         return result.total_tokens
 
+    def generate(self, prompt, schema=None):
+        super().generate(prompt, schema)
+
+        import time
+        time.sleep(5)
+
+
 class QwenModel(LLMModel):
     def __init__(self):
         super().__init__()

@@ -10,7 +10,6 @@ class Agent(ABC):
 
     workflow: StateGraph
     graph: StateGraph
-    idk: str
 
     @abstractmethod
     def _build_graph(self):
