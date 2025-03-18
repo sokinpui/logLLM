@@ -2,7 +2,7 @@
     "tests": {
         "t": {
             "TextClass": {
-                "run": "{msg} {msg2} {msg3}",
+                "run": "Hello, {name}",
                 "test_manual": "{msg} {msg2} {msg3}"
             }
         },

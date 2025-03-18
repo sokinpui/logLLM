@@ -238,27 +238,57 @@ class PromptsManager:
                 return None
         return current
 
-    def _list_prompts(self) -> List[List[str]]:
-        """List all keys in prompts.json and return them as a list of lists."""
+    def _set_nested_value(self, d: Dict[str, Any], keys: list[str], value: str) -> bool:
+        """Helper to set a nested value in a dictionary using a list of keys."""
+        current = d
+        for key in keys[:-1]:
+            if key not in current or not isinstance(current[key], dict):
+                return False
+            current = current[key]
+        final_key = keys[-1]
+        if final_key in current and isinstance(current[final_key], str):
+            current[final_key] = value
+            return True
+        return False
+
+    def _list_prompts(self, only_prompts: bool = False) -> List[List[str]]:
+        """List all keys in prompts.json (or only those with prompts if only_prompts=True) and return them as a list of lists."""
+
         def recurse_dict(d: Dict[str, Any], current_path: List[str], key_list: List[List[str]]):
             for key, value in d.items():
                 new_path = current_path + [key]
-                key_list.append(new_path)
-                if isinstance(value, dict):
+                if isinstance(value, str):  # Prompt key
+                    if only_prompts or not only_prompts:  # Always add prompt keys when not filtering, or when filtering to prompts
+                        key_list.append(new_path)
+                elif isinstance(value, dict):  # Structural key
+                    if not only_prompts:  # Add structural keys only when not filtering
+                        key_list.append(new_path)
                     recurse_dict(value, new_path, key_list)
 
         key_list = []
         recurse_dict(self.prompts, [], key_list)
 
-        # Print keys in the same format as update functions
         if key_list:
-            print("Keys in prompts.json:")
+            print(f"Keys in prompts.json{' (prompts only)' if only_prompts else ''}:")
             for keys in key_list:
                 print(f"  - {'.'.join(keys)}")
         else:
-            print("No keys found in prompts.json")
+            print(f"No keys{' with prompts' if only_prompts else ''} found in prompts.json")
 
         return key_list
+
+    def _add_prompt(self, key: str, value: str) -> bool:
+        """Add or update a prompt for an existing key with a string value."""
+        updated_prompts = self.prompts.copy()
+        keys = key.split(".")
+        if self._set_nested_value(updated_prompts, keys, value):
+            self.prompts = updated_prompts
+            self._save_prompts()
+            print(f"Added/Updated prompt for '{key}': '{value}'")
+            return True
+        else:
+            print(f"Error: Key '{key}' does not exist or is not a prompt field")
+            return False
 
     def delete_keys(self, keys):
         """Delete keys from prompts.json, returning deleted keys."""
@@ -352,7 +382,7 @@ class PromptsManager:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Manage prompts in prompts.json: update, hard update, delete, or list keys."
+        description="Manage prompts in prompts.json: update, hard update, delete, list, or add prompts."
     )
     parser.add_argument(
         "-d", "--directory",
@@ -369,27 +399,47 @@ def main():
         action="store_true",
         help="Perform a hard update: clear non-existent objects within the given directory, keep existing values"
     )
-
     parser.add_argument(
         "--delete",
         nargs="+",
         help="Keys to delete from prompts.json in dot notation (e.g., 'tests.t.TextClass.fa')"
     )
-
+    parser.add_argument(
+        "-p", "--prompt",
+        action="store_true",
+        help="With 'list', only show keys with prompt strings"
+    )
+    parser.add_argument(
+        "-k", "--key",
+        type=str,
+        help="With 'add', the key to update in dot notation (e.g., 'tests.t.TextClass.run')"
+    )
+    parser.add_argument(
+        "-v", "--value",
+        type=str,
+        help="With 'add', the string value to assign to the key"
+    )
     parser.add_argument(
         "action",
         nargs="?",
         default=None,
-        help="Action to perform: 'list' to list all keys (no flags required)"
+        help="Action to perform: 'list' to list keys, 'add' to add a prompt"
     )
 
     args = parser.parse_args()
     prompts_manager = PromptsManager()
 
     if args.action == "list":
-        key_list = prompts_manager._list_prompts()
-        # Optionally, you could do something with key_list here if needed
-        return  # Exit after listing
+        prompts_manager._list_prompts(only_prompts=args.prompt)
+        return
+
+    if args.action == "add":
+        if not args.key or not args.value:
+            print("Error: 'add' requires both -k/--key and -v/--value")
+            parser.print_help()
+            return
+        prompts_manager._add_prompt(args.key, args.value)
+        return
 
     if args.directory:
         if not os.path.isdir(args.directory):
