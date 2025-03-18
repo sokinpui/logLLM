@@ -5,6 +5,7 @@ import json
 import argparse
 import re
 import inspect
+from typing import Dict, Any
 
 class PromptsManager:
     def __init__(self, json_file="prompts/prompts.json"):
@@ -24,24 +25,24 @@ class PromptsManager:
         with open(self.json_file, "w") as f:
             json.dump(self.prompts, f, indent=4)
 
-    def _update_prompt_store(self, dir):
-        """Scan directory and update prompts.json, returning updated keys."""
-        dir_basename = os.path.basename(os.path.normpath(dir))
+    def _update_prompt_store(self, dir: str):
+        """Scan the top-level directory, update prompts.json, and return updated keys."""
         updated_prompts = self.prompts.copy()
         updated_keys = []
+        dir_name = os.path.basename(os.path.normpath(dir))
 
-        if dir_basename not in updated_prompts:
-            updated_prompts[dir_basename] = {}
-            updated_keys.append(dir_basename)
+        if dir_name not in updated_prompts:
+            updated_prompts[dir_name] = {}
+            updated_keys.append(dir_name)
 
         for filename in os.listdir(dir):
             if filename.endswith(".py") and filename != "__init__.py":
                 sub_module_name = filename[:-3]
                 file_path = os.path.join(dir, filename)
 
-                if sub_module_name not in updated_prompts[dir_basename]:
-                    updated_prompts[dir_basename][sub_module_name] = {}
-                    updated_keys.append(f"{dir_basename}.{sub_module_name}")
+                if sub_module_name not in updated_prompts[dir_name]:
+                    updated_prompts[dir_name][sub_module_name] = {}
+                    updated_keys.append(f"{dir_name}.{sub_module_name}")
 
                 with open(file_path, "r") as f:
                     tree = ast.parse(f.read())
@@ -49,23 +50,199 @@ class PromptsManager:
                 for node in ast.walk(tree):
                     if isinstance(node, ast.ClassDef):
                         class_name = node.name
-                        if class_name not in updated_prompts[dir_basename][sub_module_name]:
-                            updated_prompts[dir_basename][sub_module_name][class_name] = {}
-                            updated_keys.append(f"{dir_basename}.{sub_module_name}.{class_name}")
+                        if class_name not in updated_prompts[dir_name][sub_module_name]:
+                            updated_prompts[dir_name][sub_module_name][class_name] = {}
+                            updated_keys.append(f"{dir_name}.{sub_module_name}.{class_name}")
 
                         for class_node in node.body:
                             if isinstance(class_node, ast.FunctionDef):
                                 function_name = class_node.name
                                 if function_name.startswith("__"):
                                     continue
-                                full_key = f"{dir_basename}.{sub_module_name}.{class_name}.{function_name}"
-                                if function_name not in updated_prompts[dir_basename][sub_module_name][class_name]:
-                                    updated_prompts[dir_basename][sub_module_name][class_name][function_name] = "no prompts"
+                                full_key = f"{dir_name}.{sub_module_name}.{class_name}.{function_name}"
+                                if function_name not in updated_prompts[dir_name][sub_module_name][class_name]:
+                                    updated_prompts[dir_name][sub_module_name][class_name][function_name] = "no prompts"
                                     updated_keys.append(full_key)
 
         self.prompts = updated_prompts
         self._save_prompts()
         return updated_keys
+
+    def _update_prompt_store_recursive(self, dir: str, current_dict: Dict[str, Any] = None, base_path: str = "") -> list[str]:
+        """Truly recursive function to scan all subdirectories and update prompts.json with proper nesting."""
+        if current_dict is None:
+            current_dict = self.prompts
+        updated_keys = []
+        dir_path = os.path.normpath(dir)
+        dir_name = os.path.basename(dir_path)
+
+        if dir_name not in current_dict:
+            current_dict[dir_name] = {}
+            updated_keys.append(dir_name if not base_path else f"{base_path}.{dir_name}")
+
+        current_level = current_dict[dir_name]
+
+        for filename in os.listdir(dir_path):
+            if filename.endswith(".py") and filename != "__init__.py":
+                sub_module_name = filename[:-3]
+                file_path = os.path.join(dir_path, filename)
+
+                if sub_module_name not in current_level:
+                    current_level[sub_module_name] = {}
+                    full_key = f"{dir_name}.{sub_module_name}" if not base_path else f"{base_path}.{dir_name}.{sub_module_name}"
+                    updated_keys.append(full_key)
+
+                with open(file_path, "r") as f:
+                    tree = ast.parse(f.read())
+
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.ClassDef):
+                        class_name = node.name
+                        if class_name not in current_level[sub_module_name]:
+                            current_level[sub_module_name][class_name] = {}
+                            full_key = f"{dir_name}.{sub_module_name}.{class_name}" if not base_path else f"{base_path}.{dir_name}.{sub_module_name}.{class_name}"
+                            updated_keys.append(full_key)
+
+                        for class_node in node.body:
+                            if isinstance(class_node, ast.FunctionDef):
+                                function_name = class_node.name
+                                if function_name.startswith("__"):
+                                    continue
+                                full_key = f"{dir_name}.{sub_module_name}.{class_name}.{function_name}" if not base_path else f"{base_path}.{dir_name}.{sub_module_name}.{class_name}.{function_name}"
+                                if function_name not in current_level[sub_module_name][class_name]:
+                                    current_level[sub_module_name][class_name][function_name] = "no prompts"
+                                    updated_keys.append(full_key)
+
+        for subdir in os.listdir(dir_path):
+            subdir_path = os.path.join(dir_path, subdir)
+            if (os.path.isdir(subdir_path) and
+                not subdir.startswith('.') and
+                subdir != '__pycache__'):
+                new_base_path = dir_name if not base_path else f"{base_path}.{dir_name}"
+                sub_keys = self._update_prompt_store_recursive(subdir_path, current_level, new_base_path)
+                updated_keys.extend(sub_keys)
+
+        self.prompts = current_dict if base_path else current_dict
+        self._save_prompts()
+        return updated_keys
+
+    def _hard_update_prompt_store(self, dir: str) -> list[str]:
+        """Hard update: Update only the given top-level dir, keeping existing values, removing non-existent."""
+        updated_prompts = self.prompts.copy()
+        updated_keys = []
+        dir_name = os.path.basename(os.path.normpath(dir))
+
+        # Ensure the directory exists in prompts, even if empty
+        if dir_name not in updated_prompts:
+            updated_prompts[dir_name] = {}
+            updated_keys.append(dir_name)
+
+        # Build a new structure for the directory based on current files
+        new_level = {}
+        for filename in os.listdir(dir):
+            if filename.endswith(".py") and filename != "__init__.py":
+                sub_module_name = filename[:-3]
+                file_path = os.path.join(dir, filename)
+
+                new_level[sub_module_name] = {}
+                full_key = f"{dir_name}.{sub_module_name}"
+                updated_keys.append(full_key)
+
+                with open(file_path, "r") as f:
+                    tree = ast.parse(f.read())
+
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.ClassDef):
+                        class_name = node.name
+                        new_level[sub_module_name][class_name] = {}
+                        full_key = f"{dir_name}.{sub_module_name}.{class_name}"
+                        updated_keys.append(full_key)
+
+                        for class_node in node.body:
+                            if isinstance(class_node, ast.FunctionDef):
+                                function_name = class_node.name
+                                if function_name.startswith("__"):
+                                    continue
+                                full_key = f"{dir_name}.{sub_module_name}.{class_name}.{function_name}"
+                                old_value = self._get_nested_value(updated_prompts, full_key.split("."))
+                                new_level[sub_module_name][class_name][function_name] = old_value if old_value is not None else "no prompts"
+                                updated_keys.append(full_key)
+
+        # Replace only the scanned directory’s subtree
+        updated_prompts[dir_name] = new_level
+        self.prompts = updated_prompts
+        self._save_prompts()
+        return updated_keys
+
+    def _hard_update_prompt_store_recursive(self, dir: str, current_dict: Dict[str, Any] = None, base_path: str = "") -> list[str]:
+        """Hard update: Update only the given dir recursively, keeping existing values, removing non-existent."""
+        if current_dict is None:
+            current_dict = self.prompts.copy()
+        updated_keys = []
+        dir_path = os.path.normpath(dir)
+        dir_name = os.path.basename(dir_path)
+
+        if dir_name not in current_dict:
+            current_dict[dir_name] = {}
+            updated_keys.append(dir_name if not base_path else f"{base_path}.{dir_name}")
+
+        # Build a new structure for the current directory
+        new_level = {}
+        for filename in os.listdir(dir_path):
+            if filename.endswith(".py") and filename != "__init__.py":
+                sub_module_name = filename[:-3]
+                file_path = os.path.join(dir_path, filename)
+
+                new_level[sub_module_name] = {}
+                full_key = f"{dir_name}.{sub_module_name}" if not base_path else f"{base_path}.{dir_name}.{sub_module_name}"
+                updated_keys.append(full_key)
+
+                with open(file_path, "r") as f:
+                    tree = ast.parse(f.read())
+
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.ClassDef):
+                        class_name = node.name
+                        new_level[sub_module_name][class_name] = {}
+                        full_key = f"{dir_name}.{sub_module_name}.{class_name}" if not base_path else f"{base_path}.{dir_name}.{sub_module_name}.{class_name}"
+                        updated_keys.append(full_key)
+
+                        for class_node in node.body:
+                            if isinstance(class_node, ast.FunctionDef):
+                                function_name = class_node.name
+                                if function_name.startswith("__"):
+                                    continue
+                                full_key = f"{dir_name}.{sub_module_name}.{class_name}.{function_name}" if not base_path else f"{base_path}.{dir_name}.{sub_module_name}.{class_name}.{function_name}"
+                                old_value = self._get_nested_value(self.prompts, full_key.split("."))
+                                new_level[sub_module_name][class_name][function_name] = old_value if old_value is not None else "no prompts"
+                                updated_keys.append(full_key)
+
+        # Process subdirectories recursively
+        for subdir in os.listdir(dir_path):
+            subdir_path = os.path.join(dir_path, subdir)
+            if (os.path.isdir(subdir_path) and
+                not subdir.startswith('.') and
+                subdir != '__pycache__'):
+                new_base_path = dir_name if not base_path else f"{base_path}.{dir_name}"
+                sub_keys = self._hard_update_prompt_store_recursive(subdir_path, new_level, new_base_path)
+                updated_keys.extend(sub_keys)
+
+        # Update only the current directory’s subtree
+        current_dict[dir_name] = new_level
+        if not base_path:  # Top-level call, update self.prompts
+            self.prompts = current_dict
+        self._save_prompts()
+        return updated_keys
+
+    def _get_nested_value(self, d: Dict[str, Any], keys: list[str]) -> Any:
+        """Helper to get a nested value from a dictionary using a list of keys."""
+        current = d
+        for key in keys:
+            try:
+                current = current[key]
+            except (KeyError, TypeError):
+                return None
+        return current
 
     def delete_keys(self, keys):
         """Delete keys from prompts.json, returning deleted keys."""
@@ -96,8 +273,20 @@ class PromptsManager:
         self._save_prompts()
         return deleted_keys
 
+    def _search_prompt_recursive(self, prompts: Dict[str, Any], class_name: str, function_name: str, current_path: str = "") -> tuple[str, str] | None:
+        """Recursively search prompts dictionary for a class.function match, returning (full_path, prompt_template)."""
+        for key, value in prompts.items():
+            new_path = f"{current_path}.{key}" if current_path else key
+            if isinstance(value, dict):
+                if key == class_name and function_name in value:
+                    return new_path, value[function_name]
+                result = self._search_prompt_recursive(value, class_name, function_name, new_path)
+                if result:
+                    return result
+        return None
+
     def get_prompt(self, metadata: str = None, **variables: str) -> str:
-        """Retrieve a prompt using runtime-resolved or user-provided metadata."""
+        """Retrieve a prompt using provided metadata or dynamically resolved metadata with recursive search."""
         if metadata is None:
             caller_frame = inspect.currentframe().f_back
             if not caller_frame:
@@ -122,30 +311,26 @@ class PromptsManager:
             for part in parts:
                 current = current[part]
             prompt_template = current
-        except (KeyError, TypeError) as e:
+            full_path = metadata
+        except (KeyError, TypeError):
             class_name, function_name = parts[-2], parts[-1]
-            for dir_name, dir_data in self.prompts.items():
-                for sub_module, sub_module_data in dir_data.items():
-                    if class_name in sub_module_data and function_name in sub_module_data[class_name]:
-                        prompt_template = sub_module_data[class_name][function_name]
-                        full_path = f"{dir_name}.{sub_module}.{class_name}.{function_name}"
-                        break
-                if prompt_template:
-                    break
+            result = self._search_prompt_recursive(self.prompts, class_name, function_name)
+            if result:
+                full_path, prompt_template = result
             else:
-                raise KeyError(f"Prompt for '{metadata}' (or '{class_name}.{function_name}') not found in prompts.json") from e
+                raise KeyError(f"Prompt for '{metadata}' (or '{class_name}.{function_name}') not found in prompts.json")
 
         if not isinstance(prompt_template, str):
-            raise ValueError(f"Value at '{metadata}' is not a string prompt: {prompt_template}")
+            raise ValueError(f"Value at '{full_path}' is not a string prompt: {prompt_template}")
 
         placeholders = set(re.findall(r"\{(\w+)\}", prompt_template))
         missing_vars = placeholders - set(variables.keys())
         if missing_vars:
-            raise ValueError(f"Missing variables for prompt '{metadata}': {missing_vars}")
+            raise ValueError(f"Missing variables for prompt '{full_path}': {missing_vars}")
 
         extra_vars = set(variables.keys()) - placeholders
         if extra_vars:
-            raise ValueError(f"Extra variables provided for prompt '{metadata}' not in template: {extra_vars}")
+            raise ValueError(f"Extra variables provided for prompt '{full_path}' not in template: {extra_vars}")
 
         return prompt_template.format(**variables)
 
@@ -156,36 +341,41 @@ def main():
     parser.add_argument(
         "-d", "--directory",
         type=str,
-        help="Directory to scan and add to prompts.json (e.g., agents/)"
+        help="Directory to scan and add to prompts.json (e.g., tests/)"
+    )
+    parser.add_argument(
+        "-r", "--recursive",
+        action="store_true",
+        help="Recursively scan subdirectories, skipping hidden dirs and __pycache__"
+    )
+    parser.add_argument(
+        "--hard",
+        action="store_true",
+        help="Perform a hard update: clear non-existent objects within the given directory, keep existing values"
     )
     parser.add_argument(
         "--delete",
         nargs="+",
-        help="Keys to delete from prompts.json in dot notation (e.g., 'agents agents.reasoning_agent')"
-    )
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Print the full PROMPTS dictionary"
+        help="Keys to delete from prompts.json in dot notation (e.g., 'tests.t.TextClass.fa')"
     )
 
     args = parser.parse_args()
     prompts_manager = PromptsManager()
 
-    if args.verbose:
-        import json
-
-        # Print the header message
-        print("Initial PROMPTS:")
-
-        # Pretty-print the dictionary using json.dumps()
-        print(json.dumps(prompts_manager.prompts, indent=4))
-
     if args.directory:
         if not os.path.isdir(args.directory):
             print(f"Error: '{args.directory}' is not a valid directory")
             return
-        updated_keys = prompts_manager._update_prompt_store(args.directory)
+        if args.hard:
+            if args.recursive:
+                updated_keys = prompts_manager._hard_update_prompt_store_recursive(args.directory)
+            else:
+                updated_keys = prompts_manager._hard_update_prompt_store(args.directory)
+        else:
+            if args.recursive:
+                updated_keys = prompts_manager._update_prompt_store_recursive(args.directory)
+            else:
+                updated_keys = prompts_manager._update_prompt_store(args.directory)
         if updated_keys:
             print(f"Updated keys in prompts.json from {args.directory}:")
             for key in updated_keys:
