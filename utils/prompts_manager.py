@@ -5,7 +5,7 @@ import json
 import argparse
 import re
 import inspect
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 class PromptsManager:
     def __init__(self, json_file="prompts/prompts.json"):
@@ -132,12 +132,10 @@ class PromptsManager:
         updated_keys = []
         dir_name = os.path.basename(os.path.normpath(dir))
 
-        # Ensure the directory exists in prompts, even if empty
         if dir_name not in updated_prompts:
             updated_prompts[dir_name] = {}
             updated_keys.append(dir_name)
 
-        # Build a new structure for the directory based on current files
         new_level = {}
         for filename in os.listdir(dir):
             if filename.endswith(".py") and filename != "__init__.py":
@@ -168,7 +166,6 @@ class PromptsManager:
                                 new_level[sub_module_name][class_name][function_name] = old_value if old_value is not None else "no prompts"
                                 updated_keys.append(full_key)
 
-        # Replace only the scanned directory’s subtree
         updated_prompts[dir_name] = new_level
         self.prompts = updated_prompts
         self._save_prompts()
@@ -186,7 +183,6 @@ class PromptsManager:
             current_dict[dir_name] = {}
             updated_keys.append(dir_name if not base_path else f"{base_path}.{dir_name}")
 
-        # Build a new structure for the current directory
         new_level = {}
         for filename in os.listdir(dir_path):
             if filename.endswith(".py") and filename != "__init__.py":
@@ -217,7 +213,6 @@ class PromptsManager:
                                 new_level[sub_module_name][class_name][function_name] = old_value if old_value is not None else "no prompts"
                                 updated_keys.append(full_key)
 
-        # Process subdirectories recursively
         for subdir in os.listdir(dir_path):
             subdir_path = os.path.join(dir_path, subdir)
             if (os.path.isdir(subdir_path) and
@@ -227,9 +222,8 @@ class PromptsManager:
                 sub_keys = self._hard_update_prompt_store_recursive(subdir_path, new_level, new_base_path)
                 updated_keys.extend(sub_keys)
 
-        # Update only the current directory’s subtree
         current_dict[dir_name] = new_level
-        if not base_path:  # Top-level call, update self.prompts
+        if not base_path:
             self.prompts = current_dict
         self._save_prompts()
         return updated_keys
@@ -243,6 +237,28 @@ class PromptsManager:
             except (KeyError, TypeError):
                 return None
         return current
+
+    def _list_prompts(self) -> List[List[str]]:
+        """List all keys in prompts.json and return them as a list of lists."""
+        def recurse_dict(d: Dict[str, Any], current_path: List[str], key_list: List[List[str]]):
+            for key, value in d.items():
+                new_path = current_path + [key]
+                key_list.append(new_path)
+                if isinstance(value, dict):
+                    recurse_dict(value, new_path, key_list)
+
+        key_list = []
+        recurse_dict(self.prompts, [], key_list)
+
+        # Print keys in the same format as update functions
+        if key_list:
+            print("Keys in prompts.json:")
+            for keys in key_list:
+                print(f"  - {'.'.join(keys)}")
+        else:
+            print("No keys found in prompts.json")
+
+        return key_list
 
     def delete_keys(self, keys):
         """Delete keys from prompts.json, returning deleted keys."""
@@ -336,7 +352,7 @@ class PromptsManager:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Manage prompts in prompts.json by scanning directories or deleting keys."
+        description="Manage prompts in prompts.json: update, hard update, delete, or list keys."
     )
     parser.add_argument(
         "-d", "--directory",
@@ -353,14 +369,27 @@ def main():
         action="store_true",
         help="Perform a hard update: clear non-existent objects within the given directory, keep existing values"
     )
+
     parser.add_argument(
         "--delete",
         nargs="+",
         help="Keys to delete from prompts.json in dot notation (e.g., 'tests.t.TextClass.fa')"
     )
 
+    parser.add_argument(
+        "action",
+        nargs="?",
+        default=None,
+        help="Action to perform: 'list' to list all keys (no flags required)"
+    )
+
     args = parser.parse_args()
     prompts_manager = PromptsManager()
+
+    if args.action == "list":
+        key_list = prompts_manager._list_prompts()
+        # Optionally, you could do something with key_list here if needed
+        return  # Exit after listing
 
     if args.directory:
         if not os.path.isdir(args.directory):
@@ -392,7 +421,7 @@ def main():
         else:
             print("No keys were deleted (none found or already absent)")
 
-    if not args.directory and not args.delete:
+    if not args.directory and not args.delete and not args.action:
         parser.print_help()
 
 if __name__ == "__main__":
