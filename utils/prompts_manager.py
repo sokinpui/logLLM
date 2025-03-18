@@ -24,7 +24,7 @@ class PromptsManager:
         with open(self.json_file, "w") as f:
             json.dump(self.prompts, f, indent=4)
 
-    def update_prompt_store(self, dir):
+    def _update_prompt_store(self, dir):
         """Scan directory and update prompts.json, returning updated keys."""
         dir_basename = os.path.basename(os.path.normpath(dir))
         updated_prompts = self.prompts.copy()
@@ -185,7 +185,7 @@ def main():
         if not os.path.isdir(args.directory):
             print(f"Error: '{args.directory}' is not a valid directory")
             return
-        updated_keys = prompts_manager.update_prompt_store(args.directory)
+        updated_keys = prompts_manager._update_prompt_store(args.directory)
         if updated_keys:
             print(f"Updated keys in prompts.json from {args.directory}:")
             for key in updated_keys:
