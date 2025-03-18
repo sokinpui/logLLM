@@ -15,11 +15,11 @@
 ## Overview
 This project leverages a multi-agent architecture orchestrated by `graph.py`, supported by configuration management, utility functions, and a robust prompt management system. Key components include:
 
-- **Agents**: Specialized modules for specific tasks (see [agents.md](./agents.md)).
+- **Agents**: Specialized modules for specific tasks (see [agents.md](./doc/agents.md)).
 - **Graph**: The main entry point integrating agents into a unified workflow (see [graph.md](./graph.md)).
-- **Configurations**: Centralized settings for logging, Docker, and databases (see [configurations.md](./configurations.md)).
-- **Utilities**: Helper classes and functions for core functionality (see [utils.md](./utils.md)).
-- **Prompt Manager**: A tool to generate, store, and manage prompts in `prompts.json` (see [prompt_manager.md](./prompt_manager.md)).
+- **Configurations**: Centralized settings for logging, Docker, and databases (see [configurations.md](./doc/configurable.md)).
+- **Utilities**: Helper classes and functions for core functionality (see [utils.md](./doc/utils.md)).
+- **Prompt Manager**: A tool to generate, store, and manage prompts in `prompts.json` (see [prompt_manager.md](./doc/prompts_manager.md)).
 
 ## Installation
 1. **Clone the Repository**:
@@ -59,7 +59,7 @@ To execute the core multi-agent system:
 ```bash
 python graph.py
 ```
-See [graph.md](./graph.md) for details on how `graph.py` integrates agents and utilizes configurations and utilities.
+See [graph.md](./doc/graph.md) for details on how `graph.py` integrates agents and utilizes configurations and utilities.
 
 ### Managing Prompts with PromptsManager
 The `PromptsManager` (located in `utils/prompts_manager.py`) is a utility for generating, storing, and managing prompts used by agents or other components. It creates and maintains a `prompts.json` file in the `prompts/` directory, mapping Python code structures (directories, modules, classes, functions) to prompt strings.
@@ -142,12 +142,12 @@ The `PromptsManager` (located in `utils/prompts_manager.py`) is a utility for ge
 - **Delete**: `python utils/prompts_manager.py --delete <KEY1> <KEY2> ...`
   - Removes specified keys.
 
-See [prompt_manager.md](./prompt_manager.md) for detailed API and CLI documentation.
+See [prompt_manager.md](./doc/prompts_manager.md) for detailed API and CLI documentation.
 
 ## Documentation
 - **[agents.md](./doc/agents.md)**: Details on all agents used in the system.
 - **[graph.md](./doc/graph.md)**: Overview of `graph.py` and the multi-agent workflow.
-- **[configurations.md](./doc/configurations.md)**: Explanation of `config.py` and its settings.
+- **[configurations.md](./doc/configurable.md)**: Explanation of `config.py` and its settings.
 - **[utils.md](./doc/utils.md)**: Documentation of utility classes and functions.
 - **[prompt_manager.md](./doc/prompts_manager.md)**: In-depth guide to `prompts_manager.py`.
 
