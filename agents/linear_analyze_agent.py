@@ -3,13 +3,13 @@ from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel, Field
 from typing import TypedDict, Annotated, List
 
-from .agent_abc import Agent, add_string_message
-from data_struct import Event
-from database import ElasticsearchDatabase
-from llm_model import LLMModel
-from logger import Logger
-import config as cfg
-from .chunk_manager import ESTextChunkManager
+from agent_abc import Agent, add_string_message
+from utils.data_struct import Event
+from utils.database import ElasticsearchDatabase
+from utils.llm_model import LLMModel
+from utils.logger import Logger
+from config import config as cfg
+from utils.chunk_manager import ESTextChunkManager
 import prompts.agents.linear_analyze_agent as pal
 
 class LinearAnalyzeAgentState(TypedDict):

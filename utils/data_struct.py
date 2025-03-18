@@ -1,11 +1,8 @@
 from datetime import datetime
 from dataclasses import dataclass, asdict
-from typing import Optional
 
-
-from datetime import datetime
-from database import ElasticsearchDatabase as eldb
-import config as cfg
+from .database import ElasticsearchDatabase as eldb
+from config import config as cfg
 
 @dataclass
 class BaseData:

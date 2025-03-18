@@ -3,11 +3,11 @@ from langchain_core import embeddings
 from langchain_community.document_loaders import DirectoryLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from logger import Logger
-from database import ElasticsearchDatabase
-import prompts.rag as pr
-import config as cfg
-from llm_model import LLMModel
+from .logger import Logger
+from .llm_model import LLMModel
+from .database import ElasticsearchDatabase
+from prompts import rag as pr
+from config import config as cfg
 
 _CHUNK_SIZE = 512 # chunk size of the documents
 _CHUNK_OVERLAP = 20

@@ -3,8 +3,8 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel, Field
 
-from .agent_abc import Agent, add_string_message
-from llm_model import LLMModel
+from agent_abc import Agent, add_string_message
+from utils.llm_model import LLMModel
 
 class State(TypedDict):
     messages: Annotated[List[str], add_string_message]

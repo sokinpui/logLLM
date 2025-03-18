@@ -6,3 +6,7 @@
 models/
 venv/
 result.json
+**/tmp.py
+tmp.py
+*/tmp.py
+logs/

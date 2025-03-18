@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 
-from logger import Logger
-import config as cfg
+from .logger import Logger
+from config import config as cfg
 
 import platform
 import subprocess

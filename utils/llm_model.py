@@ -10,8 +10,8 @@ from langchain_ollama import OllamaEmbeddings
 from llama_cpp import Llama
 from contextlib import redirect_stdout, redirect_stderr
 
-import config as cfg
-from logger import Logger
+from .logger import Logger
+from config import config as cfg
 
 
 class LLMModel:
@@ -74,7 +74,7 @@ class GeminiModel(LLMModel):
         if prompt is None:
             return 0
 
-        tokenizer = tokenization.get_tokenizer_for_model(cfg.GEMINI_LLM_MODEL.replace("2.0", "1.5"))
+        tokenizer = tokenization.get_tokenizer_for_model("gemini-1.5-flash")
 
         result = tokenizer.count_tokens(prompt)
         return result.total_tokens

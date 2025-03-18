@@ -1,16 +1,15 @@
 from abc import ABC, abstractmethod
-
 from elasticsearch import Elasticsearch
-
-from database import Database, ElasticsearchDatabase
-from logger import Logger
-import config as cfg
-from data_struct import LogFile, Event
-import data_struct
-
 import os
 from elasticsearch.exceptions import NotFoundError
 from datetime import datetime
+
+from config import config as cfg
+import data_struct
+from .database import Database, ElasticsearchDatabase
+from .logger import Logger
+from .data_struct import LogFile, Event
+
 
 ## data structure used in database
 

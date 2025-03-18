@@ -1,12 +1,10 @@
 from abc import ABC, abstractmethod
-
-from logger import Logger
-
 import requests
 from elasticsearch import Elasticsearch
-import config as cfg
-
 from langchain_elasticsearch import ElasticsearchStore
+
+from .logger import Logger
+from config import config as cfg
 
 class Database(ABC):
 

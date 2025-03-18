@@ -5,15 +5,15 @@ from pydantic import BaseModel, Field
 from typing import TypedDict, List, Annotated
 import json
 
-from llm_model import LLMModel, GeminiModel
-from data_struct import LogFile, Event
-from rag_manager import RAGManager
+from utils.llm_model import LLMModel, GeminiModel
+from utils.data_struct import LogFile, Event
+from utils.rag_manager import RAGManager
 from prompts.role import SYSTEM_PROMPT
 import prompts.agents.pre_process as pap
-from logger import Logger
-from database import ElasticsearchDatabase
-from .agent_abc import Agent, add_string_message
-import config as cfg
+from utils.logger import Logger
+from utils.database import ElasticsearchDatabase
+from agent_abc import Agent, add_string_message
+from config import config as cfg
 
 class PreProcessAgentState(TypedDict):
     working_event: Event
@@ -179,9 +179,9 @@ def test():
     pass
 
 def main():
-    from llm_model import GeminiModel
-    from database import ElasticsearchDatabase
-    from collector import Collector
+    from utils.llm_model import GeminiModel
+    from utils.database import ElasticsearchDatabase
+    from utils.collector import Collector
 
     model = GeminiModel()
     es_db = ElasticsearchDatabase()
