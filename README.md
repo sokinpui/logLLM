@@ -149,5 +149,5 @@ See [prompt_manager.md](./prompt_manager.md) for detailed API and CLI documentat
 - **[graph.md](./doc/graph.md)**: Overview of `graph.py` and the multi-agent workflow.
 - **[configurations.md](./doc/configurations.md)**: Explanation of `config.py` and its settings.
 - **[utils.md](./doc/utils.md)**: Documentation of utility classes and functions.
-- **[prompt_manager.md](./doc/prompt_manager.md)**: In-depth guide to `prompts_manager.py`.
+- **[prompt_manager.md](./doc/prompts_manager.md)**: In-depth guide to `prompts_manager.py`.
 
