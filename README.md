@@ -1,10 +1,3 @@
-Below, I’ll provide an updated `README.md` file that introduces the usage of `prompts_manager.py` as part of your project, assuming it’s integrated into a larger system (e.g., `logLLM` or a similar multi-agent framework based on your document structure). I’ll also ensure it aligns with the other documentation files you’ve outlined (`agents.md`, `graph.md`, `configurations.md`, `utils.md`, `prompt_manager.md`).
-
----
-
-## Updated `README.md`
-
-```markdown
 # Project logLLM
 
 **logLLM** is a multi-agent system designed to [insert project purpose, e.g., "process and analyze log data using a collaborative agent-based workflow"]. This repository provides a modular framework integrating various agents, a central orchestration layer, and utility tools to streamline development and deployment.
