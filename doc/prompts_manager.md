@@ -173,21 +173,43 @@
     ```
   - **Where to Use**: Core method for integrating prompts into application logic, especially in agent-based systems.
 
-- **`list_versions(self, key: str = None, verbose: int = 50) -> List[Dict[str, str]]`**
-  - **Description**: Lists the Git commit history for the JSON file or a specific key, sorted by timestamp (descending). Displays commit hash, timestamp, message, and optionally the prompt (truncated or full based on `verbose`).
+- **`list_versions(self, key: str = None, verbose: int = 50, tail: int = -1, free: bool = False) -> List[Dict[str, str]]`**
+  - **Description**: Lists the Git commit history for the JSON file or a specific key, sorted by timestamp (descending). Displays commit hash, message, and optionally the prompt (truncated or full based on `verbose`). In `non-free` mode, the output is a boxed table with fixed-width columns, where commit messages longer than the default width are truncated with `...` for alignment. In `free` mode, the output is a simple list with full commit messages and prompts. No extra newlines are added between commits in either mode, ensuring a compact display.
   - **Parameters**:
     - `key` (str, optional): Dot-notation key to filter history (e.g., `"tests.t.TextClass.run"`). If `None`, lists all commits for the file.
     - `verbose` (int): Number of characters to display for prompts (default: 50; -1 for full prompt).
+    - `tail` (int): Number of recent commits to display (default: -1, meaning all commits).
+    - `free` (bool): If `True`, uses free-form output without boxed formatting; if `False`, uses a boxed table (default: `False`).
   - **Returns**: List[Dict[str, str]] - History entries with keys `"commit"`, `"timestamp"`, `"message"`, and `"prompt"` (if applicable).
-  - **Usage**: Use to inspect the version history of the prompt store or a specific prompt, either programmatically or via CLI with `version`.
+  - **Usage**: Use to inspect the version history of the prompt store or a specific prompt, either programmatically or via CLI with `version`. The output is a continuous list of commits with no extra newlines between entries, making it compact and readable.
   - **Example**:
     ```python
     pm = PromptsManager()
-    history = pm.list_versions("tests.t.TextClass.run", verbose=-1)
+    history = pm.list_versions("tests.t.TextClass.run", verbose=-1, tail=5, free=False)
     for entry in history:
         print(f"{entry['timestamp']} | {entry['commit'][:8]} | {entry['prompt']}")
     ```
   - **Where to Use**: Useful for auditing changes, debugging, or integrating version history into workflows.
+  - **Output Example (Non-Free Mode)**:
+    ```
+    Version history for 'tests.t.TextClass.run' in prompts/test.json:
+    ---------------------------------------------------------------------------------------------------------
+    | b36461a2 | asdf                                       | Prompt: no prompts
+    | 6438581b | Update test.json at Mar 19, 2025 11:18 PM  | Prompt: {msg}
+    | f5ee7beb | asdfasdfas                                 | Prompt: no prompts
+    | 64246262 | Update test.json at Mar 19, 2025 11:15 PM  | Prompt: {msg}
+    | e9497cb8 | Update test.json at Mar 19, 2025 11:05 PM  | Prompt: no prompts
+    ---------------------------------------------------------------------------------------------------------
+    ```
+  - **Output Example (Free Mode with Multi-Line Prompt)**:
+    ```
+    Version history for 'tests.t.TextClass.run' in prompts/test.json:
+    | 7929627b | Update test.json at Mar 19, 2025 03:27 PM | Prompt: # Project logLLM
+
+    **logLLM** is a multi-agent syst
+    | bda32aca | Update test.json at Mar 19, 2025 03:27 PM | Prompt: {name}
+    | 30b0f7f7 | Update test.json at Mar 19, 2025 03:10 PM | Prompt: no prompts
+    ```
 
 - **`revert_version(self, commit_hash: str, key: str = None, verbose: int = 50)`**
   - **Description**: Reverts the entire JSON file or a specific key to a previous commit state, identified by its Git commit hash, and commits the revert action.
@@ -335,19 +357,39 @@ python utils/prompts_manager.py [ACTION] [OPTIONS] [-j PATH] [--test]
     ```
 
 - **`version`**:
-  - **Description**: Lists the Git commit history for the prompt store or a specific key, sorted by timestamp.
+  - **Description**: Lists the Git commit history for the prompt store or a specific key, sorted by timestamp (descending). Displays a compact list with no extra newlines between commits. In default (non-free) mode, uses a boxed table with fixed-width columns, truncating long commit messages with `...` for alignment. In free mode, displays a simple list with full commit messages and prompts.
   - **Flags**:
     - `-k, --key <KEY>`: Key to show version history for (optional).
     - `--verbose [N]`: Print the first N characters of the prompt (default: 50; -1 for full prompt).
+    - `-t, --tail <N>`: Show the last N commits (default: -1, meaning all commits).
+    - `--free`: Use free-form output instead of the default boxed table format.
   - **Example**:
     ```bash
-    python utils/prompts_manager.py version -k tests.t.TextClass.run --verbose -1 -j custom/prompts.json
+    python utils/prompts_manager.py version -k tests.t.TextClass.run --verbose -1 -t 5 -j custom/prompts.json
     ```
     **Output**:
     ```
     Version history for 'tests.t.TextClass.run' in custom/prompts.json:
-      - 2025-03-18T10:00:00 | abc12345 | Update prompts.json at 2025-03-18T10:00:00 | Prompt: Hello, this is a long prompt fully displayed
-      - 2025-03-18T09:00:00 | def67890 | Update prompts.json at 2025-03-18T09:00:00 | Prompt: Hi, this is an earlier prompt
+    ---------------------------------------------------------------------------------------------------------
+    | b36461a2 | asdf                                       | Prompt: no prompts
+    | 6438581b | Update test.json at Mar 19, 2025 11:18 PM  | Prompt: {msg}
+    | f5ee7beb | asdfasdfas                                 | Prompt: no prompts
+    | 64246262 | Update test.json at Mar 19, 2025 11:15 PM  | Prompt: {msg}
+    | e9497cb8 | Update test.json at Mar 19, 2025 11:05 PM  | Prompt: no prompts
+    ---------------------------------------------------------------------------------------------------------
+    ```
+  - **Example (Free Mode)**:
+    ```bash
+    python utils/prompts_manager.py version -k tests.t.TextClass.run --verbose -1 -t 5 --free -j custom/prompts.json
+    ```
+    **Output**:
+    ```
+    Version history for 'tests.t.TextClass.run' in custom/prompts.json:
+    | b36461a2 | asdf | Prompt: no prompts
+    | 6438581b | Update test.json at Mar 19, 2025 11:18 PM | Prompt: {msg}
+    | f5ee7beb | asdfasdfas | Prompt: no prompts
+    | 64246262 | Update test.json at Mar 19, 2025 11:15 PM | Prompt: {msg}
+    | e9497cb8 | Update test.json at Mar 19, 2025 11:05 PM | Prompt: no prompts
     ```
 
 - **`revert`**:
@@ -392,6 +434,7 @@ python utils/prompts_manager.py [ACTION] [OPTIONS] [-j PATH] [--test]
     abc12345: Old prompt
     def67890: New prompt with {data}
     ```
+
 - **`--test`**:
   - **Description**: Uses `prompts/test.json` instead of the default `prompts/prompts.json` (overridden by `--json`).
   - **Example**:
@@ -438,3 +481,5 @@ python utils/prompts_manager.py [ACTION] [OPTIONS] [-j PATH] [--test]
 ### Notes
 - **Version Control**: The prompt store is versioned using Git in the directory containing the JSON file (e.g., `prompts/`), initialized automatically by `_ensure_git_repo`. Changes are committed with timestamps for tracking.
 - **Submodule Consideration**: If integrating into a larger Git-managed project, the prompt store’s directory (e.g., `prompts/`) can be added as a Git submodule for better portability (e.g., `git submodule add <url> prompts`).
+
+---

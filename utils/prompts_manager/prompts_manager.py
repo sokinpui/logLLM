@@ -32,8 +32,8 @@ class PromptsManager:
                 return json.load(f)
         return {}
 
-    def _save_prompts(self):
-        """Save the current prompts to the JSON file and commit to Git."""
+    def _save_prompts(self, commit_message: str = None):
+        """Save the current prompts to the JSON file and commit to Git with a custom or default message."""
         os.makedirs(os.path.dirname(self.json_file) or ".", exist_ok=True)
         with open(self.json_file, "w") as f:
             json.dump(self.prompts, f, indent=4)
@@ -41,10 +41,20 @@ class PromptsManager:
         json_dir = os.path.dirname(self.json_file) or "."
         json_base = os.path.basename(self.json_file)
         subprocess.run(["git", "add", json_base], cwd=json_dir, check=True)
-        commit_msg = f"Update {json_base} at {datetime.now().isoformat()}"
-        subprocess.run(["git", "commit", "-m", commit_msg], cwd=json_dir, check=False)  # Allow no changes
 
-    def _update_prompt_store(self, dir: str):
+        if commit_message is None:
+            # Default commit message with timestamp
+            readable_time = datetime.now().strftime("%b %d, %Y %I:%M %p")
+            commit_msg = f"Update {json_base} at {readable_time}"
+            subprocess.run(["git", "commit", "-m", commit_msg], cwd=json_dir, check=False)
+        elif commit_message == "":
+            # Open default editor (e.g., vim) for interactive commit message
+            subprocess.run(["git", "commit"], cwd=json_dir, check=True)
+        else:
+            # Use provided commit message
+            subprocess.run(["git", "commit", "-m", commit_message], cwd=json_dir, check=False)
+
+    def _update_prompt_store(self, dir: str, commit_message: str = None):
         """Scan the top-level directory, update prompts.json, and return updated keys."""
         updated_prompts = self.prompts.copy()
         updated_keys = []
@@ -84,10 +94,10 @@ class PromptsManager:
                                     updated_keys.append(full_key)
 
         self.prompts = updated_prompts
-        self._save_prompts()
+        self._save_prompts(commit_message)
         return updated_keys
 
-    def _update_prompt_store_recursive(self, dir: str, current_dict: Dict[str, Any] = None, base_path: str = "") -> list[str]:
+    def _update_prompt_store_recursive(self, dir: str, commit_message: str = None, current_dict: Dict[str, Any] = None, base_path: str = "") -> list[str]:
         """Recursively scan all subdirectories and update prompts.json with proper nesting."""
         if current_dict is None:
             current_dict = self.prompts
@@ -138,14 +148,14 @@ class PromptsManager:
                 not subdir.startswith('.') and
                 subdir != '__pycache__'):
                 new_base_path = dir_name if not base_path else f"{base_path}.{dir_name}"
-                sub_keys = self._update_prompt_store_recursive(subdir_path, current_level, new_base_path)
+                sub_keys = self._update_prompt_store_recursive(subdir_path, commit_message, current_level, new_base_path)
                 updated_keys.extend(sub_keys)
 
         self.prompts = current_dict if base_path else current_dict
-        self._save_prompts()
+        self._save_prompts(commit_message)
         return updated_keys
 
-    def _hard_update_prompt_store(self, dir: str) -> list[str]:
+    def _hard_update_prompt_store(self, dir: str, commit_message: str = None) -> list[str]:
         """Hard update: Update only the given top-level dir, keeping existing values, removing non-existent."""
         updated_prompts = self.prompts.copy()
         updated_keys = []
@@ -187,10 +197,10 @@ class PromptsManager:
 
         updated_prompts[dir_name] = new_level
         self.prompts = updated_prompts
-        self._save_prompts()
+        self._save_prompts(commit_message)
         return updated_keys
 
-    def _hard_update_prompt_store_recursive(self, dir: str, current_dict: Dict[str, Any] = None, base_path: str = "") -> list[str]:
+    def _hard_update_prompt_store_recursive(self, dir: str, commit_message: str = None, current_dict: Dict[str, Any] = None, base_path: str = "") -> list[str]:
         """Hard update: Update only the given dir recursively, keeping existing values, removing non-existent."""
         if current_dict is None:
             current_dict = self.prompts.copy()
@@ -238,13 +248,13 @@ class PromptsManager:
                 not subdir.startswith('.') and
                 subdir != '__pycache__'):
                 new_base_path = dir_name if not base_path else f"{base_path}.{dir_name}"
-                sub_keys = self._hard_update_prompt_store_recursive(subdir_path, new_level, new_base_path)
+                sub_keys = self._hard_update_prompt_store_recursive(subdir_path, commit_message, new_level, new_base_path)
                 updated_keys.extend(sub_keys)
 
         current_dict[dir_name] = new_level
         if not base_path:
             self.prompts = current_dict
-        self._save_prompts()
+        self._save_prompts(commit_message)
         return updated_keys
 
     def _get_nested_value(self, d: Dict[str, Any], keys: List[str]) -> Any:
@@ -295,20 +305,20 @@ class PromptsManager:
 
         return key_list
 
-    def add_prompt(self, key: str, value: str) -> bool:
+    def add_prompt(self, key: str, value: str, commit_message: str = None) -> bool:
         """Add or update a prompt for an existing key with a string value."""
         updated_prompts = self.prompts.copy()
         keys = key.split(".")
         if self._set_nested_value(updated_prompts, keys, value):
             self.prompts = updated_prompts
-            self._save_prompts()
+            self._save_prompts(commit_message)
             print(f"Added/Updated prompt for '{key}': '{value}'")
             return True
         else:
             print(f"Error: Key '{key}' does not exist or is not a prompt field")
             return False
 
-    def delete_keys(self, keys):
+    def delete_keys(self, keys: list[str], commit_message: str = None):
         """Delete keys from prompts.json, returning deleted keys."""
         updated_prompts = self.prompts.copy()
         deleted_keys = []
@@ -334,7 +344,7 @@ class PromptsManager:
                 print(f"Error: Invalid key path '{key}' - part of the path is not a dictionary")
 
         self.prompts = updated_prompts
-        self._save_prompts()
+        self._save_prompts(commit_message)
         return deleted_keys
 
     def _search_prompt_recursive(self, prompts: Dict[str, Any], class_name: str, function_name: str, current_path: str = "") -> tuple[str, str] | None:
@@ -398,8 +408,8 @@ class PromptsManager:
 
         return prompt_template.format(**variables)
 
-    def list_versions(self, key: str = None, verbose: int = 50) -> List[Dict[str, str]]:
-        """List commit history for a specific key or the entire file, sorted by time."""
+    def list_versions(self, key: str = None, verbose: int = 50, tail: int = -1, free: bool = False) -> List[Dict[str, str]]:
+        """List commit history for a specific key or the entire file, sorted by time, limited by tail, with optional free-form output."""
         json_dir = os.path.dirname(self.json_file) or "."
         json_base = os.path.basename(self.json_file)
 
@@ -461,16 +471,51 @@ class PromptsManager:
         else:
             print(f"Version history for '{key}' in {self.json_file}:")
 
-        for entry in sorted(history, key=lambda x: x["timestamp"], reverse=True):
-            if key and entry["prompt"]:
-                prompt_display = entry["prompt"] if verbose == -1 else entry["prompt"][:verbose]
-                print(f"| {entry['commit'][:8]} | {entry['message']} | Prompt: {prompt_display}")
-            else:
-                print(f"| {entry['commit'][:8]} | {entry['message']}")
+        # Sort by timestamp (descending) and apply tail limit
+        sorted_history = sorted(history, key=lambda x: x["timestamp"], reverse=True)
+        sorted_history = sorted_history[:tail]
 
-        return history
+        if free:
+            # Free-form output with full commit messages and prompts
+            for entry in sorted_history:
+                if key and entry["prompt"]:
+                    prompt_display = entry["prompt"] if verbose == -1 else entry["prompt"][:verbose]
+                    print(f"| {entry['commit'][:8]} | {entry['message']} | Prompt: {prompt_display}")
+                else:
+                    print(f"| {entry['commit'][:8]} | {entry['message']}")
+        else:
+            # Pretty boxed output with fixed-width columns and collapsed prompts
+            commit_width = 8  # Fixed width for commit hash
+            default_msg = f"Update {json_base} at {datetime.now().strftime('%b %d, %Y %I:%M %p')}"
+            msg_width = len(default_msg)
+            separator = " | "
 
-    def revert_version(self, commit_hash: str, key: str = None, verbose: int = 50):
+            # Calculate total width for separators
+            total_width = commit_width + len(separator) + msg_width + (len(separator))
+            print("-" * total_width)
+
+            for entry in sorted_history:
+                commit_display = entry["commit"][:8].ljust(commit_width)
+                if len(entry["message"]) > msg_width:
+                    msg_display = entry["message"][:msg_width-3] + "..."
+                else:
+                    msg_display = entry["message"].ljust(msg_width)
+                if key and entry["prompt"]:
+                    # Take the first line, truncate if needed, and remove any newlines
+                    prompt_lines = entry["prompt"].split("\n")
+                    first_line = prompt_lines[0][:verbose] if verbose != -1 else prompt_lines[0]
+                    prompt_display = f"Prompt: {first_line}"
+                    if (verbose != -1 and len(prompt_lines[0]) > verbose) or len(prompt_lines) > 1:
+                        prompt_display += "..."
+                    print(f"| {commit_display} | {msg_display} | {prompt_display}")
+                else:
+                    print(f"| {commit_display} | {msg_display}")
+
+            print("-" * total_width)
+
+        return sorted_history
+
+    def revert_version(self, commit_hash: str, key: str = None, commit_message: str = None, verbose: int = 50):
         """Revert to a specific commit, optionally for a single key."""
         json_dir = os.path.dirname(self.json_file) or "."
         json_base = os.path.basename(self.json_file)
@@ -491,7 +536,7 @@ class PromptsManager:
                 print(f"Error: Key '{key}' not found or not a prompt in commit {commit_hash}")
                 return False
             if self._set_nested_value(self.prompts, keys, old_value):
-                self._save_prompts()
+                self._save_prompts(commit_message)
                 prompt_display = old_value if verbose == -1 else old_value[:verbose]
                 print(f"Reverted '{key}' to version from commit {commit_hash}: '{prompt_display}'")
                 return True
@@ -500,7 +545,7 @@ class PromptsManager:
                 return False
         else:
             self.prompts = past_prompts
-            self._save_prompts()
+            self._save_prompts(commit_message)
             print(f"Reverted entire {self.json_file} to commit {commit_hash}")
             return True
 
@@ -582,45 +627,57 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="action", help="Action to perform")
 
-    # 'scan' action (unchanged)
+    # 'scan' action
     scan_parser = subparsers.add_parser("scan", help="Scan a directory to update the prompt store")
     scan_parser.add_argument("-d", "--directory", type=str, required=True, help="Directory to scan")
     scan_parser.add_argument("-r", "--recursive", action="store_true", help="Recursively scan subdirectories")
     scan_parser.add_argument("--hard", action="store_true", help="Perform a hard update")
     scan_parser.add_argument("--verbose", action="store_true", help="Print the entire prompt store content")
+    scan_parser.add_argument("-m", "--message", type=str, nargs="?", default=None, const="",
+                             help="Custom Git commit message; omit value to open editor")
 
-    # 'list' action (unchanged)
+    # 'list' action
     list_parser = subparsers.add_parser("list", help="List keys in the prompt store")
     list_parser.add_argument("-p", "--prompt", action="store_true", help="Only show keys with prompt strings")
     list_parser.add_argument("--verbose", action="store_true", help="Print the entire prompt store content")
 
-    # 'add' action (unchanged from previous update)
+    # 'add' action
     add_parser = subparsers.add_parser("add", help="Add or update a prompt for an existing key")
     add_parser.add_argument("-k", "--key", type=str, required=True, help="The key to update")
     add_value_group = add_parser.add_mutually_exclusive_group(required=True)
     add_value_group.add_argument("-v", "--value", type=str, help="The string value to assign")
-    add_value_group.add_argument("-f", "--file", type=str, help="File path to read the prompt string from (preserves newlines, tabs, spaces)")
+    add_value_group.add_argument("-f", "--file", type=str, help="File path to read the prompt string from")
     add_parser.add_argument("--verbose", action="store_true", help="Print the entire prompt store content")
+    add_parser.add_argument("-m", "--message", type=str, nargs="?", default=None, const="",
+                            help="Custom Git commit message; omit value to open editor")
 
-    # 'delete' action (unchanged)
+    # 'delete' action
     delete_parser = subparsers.add_parser("delete", help="Delete keys from the prompt store")
     delete_parser.add_argument("-k", "--key", type=str, nargs="+", required=True, help="Keys to delete")
     delete_parser.add_argument("--verbose", action="store_true", help="Print the entire prompt store content")
+    delete_parser.add_argument("-m", "--message", type=str, nargs="?", default=None, const="",
+                               help="Custom Git commit message; omit value to open editor")
 
-    # 'version' action (unchanged)
+    # 'version' action
     version_parser = subparsers.add_parser("version", help="List version history of prompts")
     version_parser.add_argument("-k", "--key", type=str, help="Key to show version history for")
     version_parser.add_argument("--verbose", type=int, nargs="?", const=50, default=50,
                                 help="Print first n chars of prompt (default 50, -1 for full prompt)")
+    version_parser.add_argument("-t", "--tail", type=int, nargs="?", const=-1, default=-1,
+                                help="Show last n commits (default all, -1 for all commits)")
+    version_parser.add_argument("--free", action="store_true",
+                                help="Use free-form output instead of fixed-width boxed table")
 
-    # 'revert' action (unchanged)
+    # 'revert' action
     revert_parser = subparsers.add_parser("revert", help="Revert to a previous version")
     revert_parser.add_argument("-c", "--commit", type=str, required=True, help="Commit hash to revert to")
     revert_parser.add_argument("-k", "--key", type=str, help="Key to revert; if omitted, reverts entire file")
     revert_parser.add_argument("--verbose", type=int, nargs="?", const=50, default=50,
                                help="Print first n chars of prompt (default 50, -1 for full prompt)")
+    revert_parser.add_argument("-m", "--message", type=str, nargs="?", default=None, const="",
+                               help="Custom Git commit message; omit value to open editor")
 
-    # 'diff' action (new)
+    # 'diff' action
     diff_parser = subparsers.add_parser("diff", help="Show diff between two commits for the prompt store")
     diff_parser.add_argument("-c1", "--commit1", type=str, required=True, help="First commit hash to compare")
     diff_parser.add_argument("-c2", "--commit2", type=str, required=True, help="Second commit hash to compare")
@@ -628,7 +685,7 @@ def main():
     diff_parser.add_argument("--verbose", type=int, nargs="?", const=50, default=50,
                              help="Print first n chars of prompt in diff (default 50, -1 for full prompt)")
 
-    # Top-level arguments (unchanged)
+    # Top-level arguments
     parser.add_argument("--verbose", action="store_true", help="Print verbose output")
     parser.add_argument("--test", action="store_true", help="Use prompts/test.json")
     parser.add_argument("-j", "--json", type=str, help="Specify a custom JSON file path")
@@ -643,14 +700,14 @@ def main():
             return
         if args.hard:
             if args.recursive:
-                updated_keys = prompts_manager._hard_update_prompt_store_recursive(args.directory)
+                updated_keys = prompts_manager._hard_update_prompt_store_recursive(args.directory, commit_message=args.message)
             else:
-                updated_keys = prompts_manager._hard_update_prompt_store(args.directory)
+                updated_keys = prompts_manager._hard_update_prompt_store(args.directory, commit_message=args.message)
         else:
             if args.recursive:
-                updated_keys = prompts_manager._update_prompt_store_recursive(args.directory)
+                updated_keys = prompts_manager._update_prompt_store_recursive(args.directory, commit_message=args.message)
             else:
-                updated_keys = prompts_manager._update_prompt_store(args.directory)
+                updated_keys = prompts_manager._update_prompt_store(args.directory, commit_message=args.message)
         if updated_keys:
             print(f"Updated keys in {json_file} from {args.directory}:")
             for key in updated_keys:
@@ -685,15 +742,14 @@ def main():
         else:
             print("Error: Either -v/--value or -f/--file must be provided")
             return
-
-        prompts_manager.add_prompt(args.key, prompt_value)
+        prompts_manager.add_prompt(args.key, prompt_value, commit_message=args.message)
         if args.verbose:
             print(f"\nCurrent {json_file} content:")
             print(json.dumps(prompts_manager.prompts, indent=4))
         return
 
     if args.action == "delete":
-        deleted_keys = prompts_manager.delete_keys(args.key)
+        deleted_keys = prompts_manager.delete_keys(args.key, commit_message=args.message)
         if deleted_keys:
             print(f"Deleted keys from {json_file}:")
             for key in deleted_keys:
@@ -706,11 +762,16 @@ def main():
         return
 
     if args.action == "version":
-        prompts_manager.list_versions(args.key, verbose=args.verbose)
+        prompts_manager.list_versions(args.key, verbose=args.verbose, tail=args.tail, free=args.free)
         return
 
     if args.action == "revert":
-        prompts_manager.revert_version(args.commit, args.key, verbose=args.verbose)
+        success = prompts_manager.revert_version(args.commit, args.key, commit_message=args.message, verbose=args.verbose)
+        if success:
+            if args.key:
+                pass
+            else:
+                print(f"Reverted entire {json_file} to commit {args.commit}")
         if args.verbose != 50:
             print(f"\nCurrent {json_file} content:")
             print(json.dumps(prompts_manager.prompts, indent=4))
