@@ -1,23 +1,22 @@
 ## File: `prompts_manager.py`
 
 ### Class: `PromptsManager`
-- **Purpose**: Manages a JSON-based prompt store (`prompts.json`) for storing and retrieving prompts associated with Python code structures (directories, modules, classes, and functions). It supports scanning directories to populate the store, deleting keys, listing keys, adding/updating prompts, and retrieving prompts with placeholder substitution. Designed as a utility that can be imported and used across various parts of a project.
-- **Location**: Recommended to place this file in a `utils/` directory within your project (e.g., `project_root/utils/prompts_manager.py`), as it serves as a reusable utility module.
+- **Purpose**: Manages a JSON-based prompt store (default: `prompts/prompts.json`, or custom via `--json`/`--test`) for storing and retrieving prompts associated with Python code structures (directories, modules, classes, and functions). It supports scanning directories to populate the store, deleting keys, listing keys, adding/updating prompts, and retrieving prompts with placeholder substitution. Designed as a reusable utility module.
+- **Location**: Recommended to place in `utils/` (e.g., `project_root/utils/prompts_manager.py`).
 - **Dependencies**: Requires Python standard libraries (`os`, `ast`, `json`, `argparse`, `re`, `inspect`) and `typing` for type hints.
 
 #### Key Methods:
 - **`__init__(self, json_file: str = "prompts/prompts.json")`**
-  - **Description**: Initializes the `PromptsManager` with a specified JSON file path where prompts are stored. Loads existing prompts if the file exists.
+  - **Description**: Initializes the `PromptsManager` with a specified JSON file path. Loads existing prompts if the file exists.
   - **Parameters**:
-    - `json_file` (str): Path to the JSON file (default: `"prompts/prompts.json"`).
+    - `json_file` (str): Path to the JSON file (default: `"prompts/prompts.json"`, overridden by `--json` or `--test` in CLI).
   - **Returns**: None
-  - **Usage**: Creates a `PromptsManager` instance to manage prompts programmatically or via CLI.
+  - **Usage**: Creates a `PromptsManager` instance for prompt management.
   - **Example**:
     ```python
     from utils.prompts_manager import PromptsManager
-    pm = PromptsManager()  # Uses default "prompts/prompts.json"
+    pm = PromptsManager("custom/prompts.json")  # Custom file
     ```
-  - **Where to Use**: Instantiate in any script, module, or class needing prompt management, such as agents, workflows, or custom tools.
 
 - **`_load_prompts(self)`**
   - **Description**: Loads the existing prompts from the JSON file into memory. Returns an empty dictionary if the file doesn’t exist.
@@ -215,35 +214,36 @@ print(agent.process_log("error log"))  # "Analyze error log"
 
 ---
 
+
 ### Command-Line Interface (CLI)
-Run from the project root where `prompts/` is a subdirectory.
+Run from the project root where `prompts/` is a subdirectory (unless overridden by `--json`).
 
 #### Usage
 ```bash
-python utils/prompts_manager.py [ACTION] [OPTIONS]
+python utils/prompts_manager.py [ACTION] [OPTIONS] [-j PATH] [--test]
 ```
 
 #### Actions and Options
 - **`scan`**:
-  - **Description**: Scans a directory to update `prompts.json`.
+  - **Description**: Scans a directory to update the prompt store.
   - **Flags**:
     - `-d, --directory <DIR>` (required): Directory to scan.
     - `-r, --recursive`: Recursively scan subdirectories.
     - `--hard`: Perform a hard update, removing non-existent entries.
-    - `--verbose`: Print the full `prompts.json` after scanning.
+    - `--verbose`: Print the full prompt store content.
   - **Example**:
     ```bash
-    python utils/prompts_manager.py scan -d tests/ -r --verbose
+    python utils/prompts_manager.py scan -d tests/ -r -j custom/prompts.json
     ```
 
 - **`list`**:
-  - **Description**: Lists all keys or only prompt keys in `prompts.json`.
+  - **Description**: Lists all keys or only prompt keys.
   - **Flags**:
     - `-p, --prompt`: Restrict to keys with string prompts.
-    - `--verbose`: Print the full `prompts.json`.
+    - `--verbose`: Print the full prompt store content.
   - **Example**:
     ```bash
-    python utils/prompts_manager.py list --prompt
+    python utils/prompts_manager.py list --prompt -j custom/prompts.json
     ```
 
 - **`add`**:
@@ -251,29 +251,66 @@ python utils/prompts_manager.py [ACTION] [OPTIONS]
   - **Flags**:
     - `-k, --key <KEY>` (required): Key in dot notation.
     - `-v, --value <VALUE>` (required): New prompt string.
-    - `--verbose`: Print the full `prompts.json`.
+    - `--verbose`: Print the full prompt store content.
   - **Example**:
     ```bash
-    python utils/prompts_manager.py add -k tests.t.TextClass.run -v "Hello, {name}"
+    python utils/prompts_manager.py add -k tests.t.TextClass.run -v "Hello, {name}" -j custom/prompts.json
     ```
 
 - **`delete`**:
-  - **Description**: Deletes specified keys from `prompts.json`.
+  - **Description**: Deletes specified keys from the prompt store.
   - **Flags**:
     - `-k, --key <KEY1> <KEY2> ...` (required): Keys to delete.
-    - `--verbose`: Print the full `prompts.json`.
+    - `--verbose`: Print the full prompt store content.
   - **Example**:
     ```bash
-    python utils/prompts_manager.py delete -k tests.t.TextClass.run
+    python utils/prompts_manager.py delete -k tests.t.TextClass.run -j custom/prompts.json
+    ```
+
+- **`--test`**:
+  - **Description**: Uses `prompts/test.json` instead of the default `prompts/prompts.json` (overridden by `--json`).
+  - **Example**:
+    ```bash
+    python utils/prompts_manager.py scan -d tests/ --test
+    ```
+
+- **`-j, --json <PATH>`**:
+  - **Description**: Specifies a custom JSON file path for the prompt store, overriding `--test` and the default `prompts/prompts.json`. The directory containing the file (including subdirectories) must exist, though the file itself can be created if absent.
+  - **Example**:
+    ```bash
+    python utils/prompts_manager.py scan -d tests/ -j custom/prompts.json --verbose
+    ```
+    **Output**:
+    ```
+    Updated keys in custom/prompts.json from tests/:
+      - tests.t.TextClass.run
+    Current custom/prompts.json content:
+    {
+        "tests": {
+            "t": {
+                "TextClass": {
+                    "run": "no prompts"
+                }
+            }
+        }
+    }
+    ```
+    **Invalid Example**:
+    ```bash
+    python utils/prompts_manager.py scan -d tests/ -j nonexistent/dir/prompts.json
+    ```
+    **Output**:
+    ```
+    Error: Directory 'nonexistent/dir' for JSON file 'nonexistent/dir/prompts.json' does not exist
     ```
 
 - **No Arguments**:
   - **Description**: Displays the help message.
   - **Example**:
     ```bash
-    python utils/prompts_manager.py
+    python utils/prompts_manager.py -j custom/prompts.json
     ```
 
 #### Directory Context
-- **Run From**: Project root (e.g., `project_root/`).
+- **Run From**: Project root (e.g., `project_root/`), unless `--json` specifies a different base path.
 - **Target Directories**: Use relative paths (e.g., `tests/`).
