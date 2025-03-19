@@ -251,7 +251,7 @@ class PromptsManager:
             return True
         return False
 
-    def _list_prompts(self, only_prompts: bool = False) -> List[List[str]]:
+    def list_prompts(self, only_prompts: bool = False) -> List[List[str]]:
         """List all keys in prompts.json (or only those with prompts if only_prompts=True) and return them as a list of lists."""
 
         def recurse_dict(d: Dict[str, Any], current_path: List[str], key_list: List[List[str]]):
@@ -277,7 +277,7 @@ class PromptsManager:
 
         return key_list
 
-    def _add_prompt(self, key: str, value: str) -> bool:
+    def add_prompt(self, key: str, value: str) -> bool:
         """Add or update a prompt for an existing key with a string value."""
         updated_prompts = self.prompts.copy()
         keys = key.split(".")
@@ -382,66 +382,93 @@ class PromptsManager:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Manage prompts in prompts.json: update, hard update, delete, list, or add prompts."
+        description="Manage prompts in prompts.json: scan directories, list keys, add prompts, or delete keys."
     )
-    parser.add_argument(
+    subparsers = parser.add_subparsers(dest="action", help="Action to perform")
+
+    # 'scan' action
+    scan_parser = subparsers.add_parser("scan", help="Scan a directory to update prompts.json")
+    scan_parser.add_argument(
         "-d", "--directory",
         type=str,
+        required=True,
         help="Directory to scan and add to prompts.json (e.g., tests/)"
     )
-    parser.add_argument(
+    scan_parser.add_argument(
         "-r", "--recursive",
         action="store_true",
         help="Recursively scan subdirectories, skipping hidden dirs and __pycache__"
     )
-    parser.add_argument(
+    scan_parser.add_argument(
         "--hard",
         action="store_true",
         help="Perform a hard update: clear non-existent objects within the given directory, keep existing values"
     )
-    parser.add_argument(
-        "--delete",
-        nargs="+",
-        help="Keys to delete from prompts.json in dot notation (e.g., 'tests.t.TextClass.fa')"
+    scan_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print the entire prompts.json content after the operation"
     )
-    parser.add_argument(
+
+    # 'list' action
+    list_parser = subparsers.add_parser("list", help="List keys in prompts.json")
+    list_parser.add_argument(
         "-p", "--prompt",
         action="store_true",
-        help="With 'list', only show keys with prompt strings"
+        help="Only show keys with prompt strings"
     )
-    parser.add_argument(
+    list_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print the entire prompts.json content after the operation"
+    )
+
+    # 'add' action
+    add_parser = subparsers.add_parser("add", help="Add or update a prompt for an existing key")
+    add_parser.add_argument(
         "-k", "--key",
         type=str,
-        help="With 'add', the key to update in dot notation (e.g., 'tests.t.TextClass.run')"
+        required=True,
+        help="The key to update in dot notation (e.g., 'tests.t.TextClass.run')"
     )
-    parser.add_argument(
+    add_parser.add_argument(
         "-v", "--value",
         type=str,
-        help="With 'add', the string value to assign to the key"
+        required=True,
+        help="The string value to assign to the key"
     )
+    add_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print the entire prompts.json content after the operation"
+    )
+
+    # 'delete' action
+    delete_parser = subparsers.add_parser("delete", help="Delete keys from prompts.json")
+    delete_parser.add_argument(
+        "-k", "--key",
+        type=str,
+        nargs="+",
+        required=True,
+        help="Keys to delete from prompts.json in dot notation (e.g., 'tests.t.TextClass.run')"
+    )
+    delete_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print the entire prompts.json content after the operation"
+    )
+
+    # Top-level --verbose (for cases where no action is specified, though now less relevant)
     parser.add_argument(
-        "action",
-        nargs="?",
-        default=None,
-        help="Action to perform: 'list' to list keys, 'add' to add a prompt"
+        "--verbose",
+        action="store_true",
+        help="Print the entire prompts.json content after the operation (if no action specified)"
     )
 
     args = parser.parse_args()
     prompts_manager = PromptsManager()
 
-    if args.action == "list":
-        prompts_manager._list_prompts(only_prompts=args.prompt)
-        return
-
-    if args.action == "add":
-        if not args.key or not args.value:
-            print("Error: 'add' requires both -k/--key and -v/--value")
-            parser.print_help()
-            return
-        prompts_manager._add_prompt(args.key, args.value)
-        return
-
-    if args.directory:
+    if args.action == "scan":
         if not os.path.isdir(args.directory):
             print(f"Error: '{args.directory}' is not a valid directory")
             return
@@ -461,17 +488,39 @@ def main():
                 print(f"  - {key}")
         else:
             print(f"No new keys added from {args.directory}")
+        if args.verbose:
+            print("\nCurrent prompts.json content:")
+            print(json.dumps(prompts_manager.prompts, indent=4))
+        return
 
-    if args.delete:
-        deleted_keys = prompts_manager.delete_keys(args.delete)
+    if args.action == "list":
+        prompts_manager.list_prompts(only_prompts=args.prompt)
+        if args.verbose:
+            print("\nCurrent prompts.json content:")
+            print(json.dumps(prompts_manager.prompts, indent=4))
+        return
+
+    if args.action == "add":
+        prompts_manager.add_prompt(args.key, args.value)
+        if args.verbose:
+            print("\nCurrent prompts.json content:")
+            print(json.dumps(prompts_manager.prompts, indent=4))
+        return
+
+    if args.action == "delete":
+        deleted_keys = prompts_manager.delete_keys(args.key)
         if deleted_keys:
             print("Deleted keys from prompts.json:")
             for key in deleted_keys:
                 print(f"  - {key}")
         else:
             print("No keys were deleted (none found or already absent)")
+        if args.verbose:
+            print("\nCurrent prompts.json content:")
+            print(json.dumps(prompts_manager.prompts, indent=4))
+        return
 
-    if not args.directory and not args.delete and not args.action:
+    if not args.action:
         parser.print_help()
 
 if __name__ == "__main__":

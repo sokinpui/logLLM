@@ -1,6 +1,6 @@
 # Project logLLM
 
-**logLLM** is a multi-agent system designed to [insert project purpose, e.g., "process and analyze log data using a collaborative agent-based workflow"]. This repository provides a modular framework integrating various agents, a central orchestration layer, and utility tools to streamline development and deployment.
+**logLLM** is a multi-agent system designed to process and analyze log data using a collaborative agent-based workflow. This repository provides a modular framework integrating various agents, a central orchestration layer, and utility tools to streamline development and deployment.
 
 ## Table of Contents
 - [Overview](#overview)
@@ -16,10 +16,10 @@
 This project leverages a multi-agent architecture orchestrated by `graph.py`, supported by configuration management, utility functions, and a robust prompt management system. Key components include:
 
 - **Agents**: Specialized modules for specific tasks (see [agents.md](./doc/agents.md)).
-- **Graph**: The main entry point integrating agents into a unified workflow (see [graph.md](./graph.md)).
+- **Graph**: The main entry point integrating agents into a unified workflow (see [graph.md](./doc/graph.md)).
 - **Configurations**: Centralized settings for logging, Docker, and databases (see [configurations.md](./doc/configurable.md)).
 - **Utilities**: Helper classes and functions for core functionality (see [utils.md](./doc/utils.md)).
-- **Prompt Manager**: A tool to generate, store, and manage prompts in `prompts.json` (see [prompt_manager.md](./doc/prompts_manager.md)).
+- **Prompt Manager**: A tool to generate, store, and manage prompts in `prompts.json`, designed for broad use across the project (see [prompt_manager.md](./doc/prompts_manager.md)).
 
 ## Installation
 1. **Clone the Repository**:
@@ -38,7 +38,7 @@ This project leverages a multi-agent architecture orchestrated by `graph.py`, su
    ```bash
    pip install -r requirements.txt
    ```
-   *Note*: Ensure `requirements.txt` includes any dependencies (e.g., none beyond Python standard libraries for `prompts_manager.py`).
+   *Note*: `prompts_manager.py` requires only standard libraries.
 
 4. **Project Structure**:
    ```
@@ -59,56 +59,33 @@ To execute the core multi-agent system:
 ```bash
 python graph.py
 ```
-See [graph.md](./doc/graph.md) for details on how `graph.py` integrates agents and utilizes configurations and utilities.
+See [graph.md](./doc/graph.md) for details.
 
 ### Managing Prompts with PromptsManager
-The `PromptsManager` (located in `utils/prompts_manager.py`) is a utility for generating, storing, and managing prompts used by agents or other components. It creates and maintains a `prompts.json` file in the `prompts/` directory, mapping Python code structures (directories, modules, classes, functions) to prompt strings.
+The `PromptsManager` (in `utils/prompts_manager.py`) manages prompts in `prompts.json`, mapping Python code structures to prompt strings. Its public API is designed for use across agents, scripts, and workflows.
 
 #### Why Use PromptsManager?
-- **Dynamic Prompts**: Agents can retrieve prompts at runtime using `get_prompt`, adapting to code structure changes.
-- **Centralized Management**: Store all prompts in a single JSON file, editable manually or via CLI.
-- **Synchronization**: Keep `prompts.json` aligned with your codebase using update and hard update features.
+- **Dynamic Prompts**: Retrieve prompts at runtime with `get_prompt`.
+- **Centralized Management**: Store and manage prompts in one JSON file.
+- **Programmatic Control**: Use `list_prompts`, `add_prompt`, and `delete_keys` in your code.
 
 #### Quick Start
 1. **Initialize `prompts.json`**:
-   Scan a directory (e.g., `agents/`) to populate `prompts.json` with your code structure:
    ```bash
-   python utils/prompts_manager.py -d agents/ -r
-   ```
-   This recursively scans `agents/`, adding entries like `"agents.module.AgentClass.method": "no prompts"`.
-
-2. **List All Keys**:
-   View the current structure of `prompts.json`:
-   ```bash
-   python utils/prompts_manager.py list
-   ```
-   **Output**:
-   ```
-   Keys in prompts.json:
-     - agents
-     - agents.module
-     - agents.module.AgentClass
-     - agents.module.AgentClass.method
+   python utils/prompts_manager.py scan -d agents/ -r
    ```
 
-3. **List Prompt Keys Only**:
-   See only keys with actual prompts:
+2. **List Keys**:
    ```bash
    python utils/prompts_manager.py list --prompt
    ```
 
-4. **Add a Prompt**:
-   Assign a custom prompt to an existing function:
+3. **Add a Prompt**:
    ```bash
-   python utils/prompts_manager.py add -k agents.module.AgentClass.method -v "Process {data} now"
-   ```
-   **Output**:
-   ```
-   Added/Updated prompt for 'agents.module.AgentClass.method': 'Process {data} now'
+   python utils/prompts_manager.py add -k agents.module.AgentClass.method -v "Process {data}"
    ```
 
-5. **Use in Code**:
-   Agents can retrieve prompts dynamically:
+4. **Use in Code**:
    ```python
    from utils.prompts_manager import PromptsManager
 
@@ -117,37 +94,32 @@ The `PromptsManager` (located in `utils/prompts_manager.py`) is a utility for ge
            self.pm = PromptsManager()
 
        def method(self, data):
-           prompt = self.pm.get_prompt(data="log data")  # Resolves to "agents.module.AgentClass.method"
-           print(prompt)  # "Process log data now"
+           # List prompts for debugging
+           prompts = self.pm.list_prompts(only_prompts=True)
+           print("Prompts:", prompts)
+           # Get prompt dynamically
+           return self.pm.get_prompt(data=data)
 
    agent = AgentClass()
-   agent.method("log data")
+   print(agent.method("log data"))  # "Process log data"
    ```
 
-6. **Synchronize with Code**:
-   After modifying code, use a hard update to remove outdated entries:
+5. **Delete Keys**:
    ```bash
-   python utils/prompts_manager.py -d agents/ -r --hard
+   python utils/prompts_manager.py delete -k agents.module.AgentClass.method
    ```
 
 #### CLI Commands
-- **Update**: `python utils/prompts_manager.py -d <DIR> [-r]`
-  - Adds new entries without removing existing ones.
-- **Hard Update**: `python utils/prompts_manager.py -d <DIR> [-r] --hard`
-  - Rebuilds the directory’s subtree, preserving prompts for existing objects.
-- **List**: `python utils/prompts_manager.py list [--prompt]`
-  - Lists all keys or only prompt keys.
-- **Add**: `python utils/prompts_manager.py add -k <KEY> -v <VALUE>`
-  - Updates an existing prompt key.
-- **Delete**: `python utils/prompts_manager.py --delete <KEY1> <KEY2> ...`
-  - Removes specified keys.
+- **Scan**: `python utils/prompts_manager.py scan -d <DIR> [-r] [--hard] [--verbose]`
+- **List**: `python utils/prompts_manager.py list [--prompt] [--verbose]`
+- **Add**: `python utils/prompts_manager.py add -k <KEY> -v <VALUE> [--verbose]`
+- **Delete**: `python utils/prompts_manager.py delete -k <KEY1> <KEY2> ... [--verbose]`
 
-See [prompt_manager.md](./doc/prompts_manager.md) for detailed API and CLI documentation.
+See [prompt_manager.md](./doc/prompts_manager.md) for full details.
 
 ## Documentation
-- **[agents.md](./doc/agents.md)**: Details on all agents used in the system.
-- **[graph.md](./doc/graph.md)**: Overview of `graph.py` and the multi-agent workflow.
-- **[configurations.md](./doc/configurable.md)**: Explanation of `config.py` and its settings.
-- **[utils.md](./doc/utils.md)**: Documentation of utility classes and functions.
-- **[prompt_manager.md](./doc/prompts_manager.md)**: In-depth guide to `prompts_manager.py`.
-
+- **[agents.md](./doc/agents.md)**: Agent details.
+- **[graph.md](./doc/graph.md)**: Workflow overview.
+- **[configurations.md](./doc/configurable.md)**: Config settings.
+- **[utils.md](./doc/utils.md)**: Utility documentation.
+- **[prompt_manager.md](./doc/prompts_manager.md)**: Prompt management guide.

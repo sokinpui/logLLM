@@ -1,20 +1,4 @@
 {
-    "tests": {
-        "t": {
-            "TextClass": {
-                "run": "Hello, {name}",
-                "test_manual": "{msg} {msg2} {msg3}"
-            }
-        },
-        "subdir": {
-            "nested": {
-                "NestedClass": {
-                    "run": "{msg} {msg2} {msg3}"
-                }
-            },
-            "asdf": {}
-        }
-    },
     "agents": {
         "linear_analyze_agent": {
             "LinearAnalyzeAgentState": {},
