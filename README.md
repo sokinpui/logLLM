@@ -1,6 +1,3 @@
-### Updated `README.md`
-
-```markdown
 # Project logLLM
 
 **logLLM** is a multi-agent system designed to process and analyze log data using a collaborative agent-based workflow. This repository provides a modular framework integrating various agents, a central orchestration layer, and utility tools to streamline development and deployment.
