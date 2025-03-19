@@ -1,3 +1,3 @@
 [submodule "prompts"]
 	path = prompts
-	url = ./prompts
+	url =  https://github.com/sokinpui/LogLLM_prompts.git
