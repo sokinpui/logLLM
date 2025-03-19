@@ -464,9 +464,9 @@ class PromptsManager:
         for entry in sorted(history, key=lambda x: x["timestamp"], reverse=True):
             if key and entry["prompt"]:
                 prompt_display = entry["prompt"] if verbose == -1 else entry["prompt"][:verbose]
-                print(f"  - {entry['timestamp']} | {entry['commit'][:8]} | {entry['message']} | Prompt: {prompt_display}")
+                print(f"| {entry['commit'][:8]} | {entry['message']} | Prompt: {prompt_display}")
             else:
-                print(f"  - {entry['timestamp']} | {entry['commit'][:8]} | {entry['message']}")
+                print(f"| {entry['commit'][:8]} | {entry['message']}")
 
         return history
 
