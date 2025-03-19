@@ -1,3 +1,4 @@
 [submodule "prompts"]
 	path = prompts
 	url =  https://github.com/sokinpui/LogLLM_prompts.git
+        pushRecurseSubmodules = on-demand

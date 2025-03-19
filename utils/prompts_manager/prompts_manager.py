@@ -504,6 +504,78 @@ class PromptsManager:
             print(f"Reverted entire {self.json_file} to commit {commit_hash}")
             return True
 
+    def show_diff(self, commit1: str, commit2: str, key: str = None, verbose: int = 50):
+        """Show a readable diff between two commits for the JSON file or a specific key."""
+        json_dir = os.path.dirname(self.json_file) or "."
+        json_base = os.path.basename(self.json_file)
+        json_file = self.json_file
+
+        # Get the content of the JSON file at commit1
+        result1 = subprocess.run(
+            ["git", "show", f"{commit1}:{json_base}"],
+            cwd=json_dir,
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if result1.returncode != 0:
+            print(f"Error: Could not retrieve {json_file} at commit {commit1}")
+            return
+
+        # Get the content of the JSON file at commit2
+        result2 = subprocess.run(
+            ["git", "show", f"{commit2}:{json_base}"],
+            cwd=json_dir,
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if result2.returncode != 0:
+            print(f"Error: Could not retrieve {json_file} at commit {commit2}")
+            return
+
+        try:
+            content1 = json.loads(result1.stdout)
+            content2 = json.loads(result2.stdout)
+        except json.JSONDecodeError as e:
+            print(f"Error: Invalid JSON in one or both commits ({commit1}, {commit2}): {e}")
+            return
+
+        if key:
+            # Extract the prompt for the specific key
+            keys = key.split(".")
+            prompt1 = self._get_nested_value(content1, keys)
+            prompt2 = self._get_nested_value(content2, keys)
+
+            if prompt1 is None and prompt2 is None:
+                print(f"Key '{key}' not found in either {commit1} or {commit2}")
+                return
+            elif prompt1 == prompt2:
+                print(f"No difference found for key '{key}' between {commit1} and {commit2}")
+                return
+
+            # Apply verbose truncation if applicable
+            display_prompt1 = prompt1 if verbose == -1 or prompt1 is None else prompt1[:verbose]
+            display_prompt2 = prompt2 if verbose == -1 or prompt2 is None else prompt2[:verbose]
+
+            print(f"Diff for key '{key}' between {commit1} and {commit2} in {json_file}:")
+            print(f"{commit1}:\n{display_prompt1}")
+            print()
+            print(f"{commit2}:\n{display_prompt2}")
+        else:
+            # Compare the entire file
+            if content1 == content2:
+                print(f"No differences found between {commit1} and {commit2} for {json_file}")
+                return
+
+            print(f"Diff between {commit1} and {commit2} for {json_file}:")
+            # For simplicity, show full JSON content with truncation for readability
+            display_content1 = json.dumps(content1, indent=4) if verbose == -1 else json.dumps(content1, indent=4)[:verbose]
+            display_content2 = json.dumps(content2, indent=4) if verbose == -1 else json.dumps(content2, indent=4)[:verbose]
+            print(f"{commit1}:\n{display_content1}")
+            print()
+            print(f"{commit2}:\n{display_content2}")
+
 def main():
     parser = argparse.ArgumentParser(
         description="Manage prompts in a JSON file with version control."
@@ -522,10 +594,12 @@ def main():
     list_parser.add_argument("-p", "--prompt", action="store_true", help="Only show keys with prompt strings")
     list_parser.add_argument("--verbose", action="store_true", help="Print the entire prompt store content")
 
-    # 'add' action (unchanged)
+    # 'add' action (unchanged from previous update)
     add_parser = subparsers.add_parser("add", help="Add or update a prompt for an existing key")
     add_parser.add_argument("-k", "--key", type=str, required=True, help="The key to update")
-    add_parser.add_argument("-v", "--value", type=str, required=True, help="The string value to assign")
+    add_value_group = add_parser.add_mutually_exclusive_group(required=True)
+    add_value_group.add_argument("-v", "--value", type=str, help="The string value to assign")
+    add_value_group.add_argument("-f", "--file", type=str, help="File path to read the prompt string from (preserves newlines, tabs, spaces)")
     add_parser.add_argument("--verbose", action="store_true", help="Print the entire prompt store content")
 
     # 'delete' action (unchanged)
@@ -533,18 +607,26 @@ def main():
     delete_parser.add_argument("-k", "--key", type=str, nargs="+", required=True, help="Keys to delete")
     delete_parser.add_argument("--verbose", action="store_true", help="Print the entire prompt store content")
 
-    # 'version' action (updated)
+    # 'version' action (unchanged)
     version_parser = subparsers.add_parser("version", help="List version history of prompts")
     version_parser.add_argument("-k", "--key", type=str, help="Key to show version history for")
     version_parser.add_argument("--verbose", type=int, nargs="?", const=50, default=50,
                                 help="Print first n chars of prompt (default 50, -1 for full prompt)")
 
-    # 'revert' action (updated)
+    # 'revert' action (unchanged)
     revert_parser = subparsers.add_parser("revert", help="Revert to a previous version")
     revert_parser.add_argument("-c", "--commit", type=str, required=True, help="Commit hash to revert to")
     revert_parser.add_argument("-k", "--key", type=str, help="Key to revert; if omitted, reverts entire file")
     revert_parser.add_argument("--verbose", type=int, nargs="?", const=50, default=50,
                                help="Print first n chars of prompt (default 50, -1 for full prompt)")
+
+    # 'diff' action (new)
+    diff_parser = subparsers.add_parser("diff", help="Show diff between two commits for the prompt store")
+    diff_parser.add_argument("-c1", "--commit1", type=str, required=True, help="First commit hash to compare")
+    diff_parser.add_argument("-c2", "--commit2", type=str, required=True, help="Second commit hash to compare")
+    diff_parser.add_argument("-k", "--key", type=str, help="Key to filter diff for (optional)")
+    diff_parser.add_argument("--verbose", type=int, nargs="?", const=50, default=50,
+                             help="Print first n chars of prompt in diff (default 50, -1 for full prompt)")
 
     # Top-level arguments (unchanged)
     parser.add_argument("--verbose", action="store_true", help="Print verbose output")
@@ -588,7 +670,23 @@ def main():
         return
 
     if args.action == "add":
-        prompts_manager.add_prompt(args.key, args.value)
+        if args.value is not None:
+            prompt_value = args.value
+        elif args.file is not None:
+            try:
+                with open(args.file, "r", encoding="utf-8") as f:
+                    prompt_value = f.read()
+            except FileNotFoundError:
+                print(f"Error: File '{args.file}' not found")
+                return
+            except Exception as e:
+                print(f"Error reading file '{args.file}': {e}")
+                return
+        else:
+            print("Error: Either -v/--value or -f/--file must be provided")
+            return
+
+        prompts_manager.add_prompt(args.key, prompt_value)
         if args.verbose:
             print(f"\nCurrent {json_file} content:")
             print(json.dumps(prompts_manager.prompts, indent=4))
@@ -613,9 +711,13 @@ def main():
 
     if args.action == "revert":
         prompts_manager.revert_version(args.commit, args.key, verbose=args.verbose)
-        if args.verbose != 50:  # Only print full content if verbosity is non-default
+        if args.verbose != 50:
             print(f"\nCurrent {json_file} content:")
             print(json.dumps(prompts_manager.prompts, indent=4))
+        return
+
+    if args.action == "diff":
+        prompts_manager.show_diff(args.commit1, args.commit2, args.key, verbose=args.verbose)
         return
 
     if not args.action:
