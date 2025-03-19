@@ -398,12 +398,11 @@ class PromptsManager:
 
         return prompt_template.format(**variables)
 
-    def list_versions(self, key: str = None) -> List[Dict[str, str]]:
+    def list_versions(self, key: str = None, verbose: int = 50) -> List[Dict[str, str]]:
         """List commit history for a specific key or the entire file, sorted by time."""
         json_dir = os.path.dirname(self.json_file) or "."
         json_base = os.path.basename(self.json_file)
 
-        # Get commit log
         result = subprocess.run(
             ["git", "log", "--pretty=format:%H %ct %s", json_base],
             cwd=json_dir,
@@ -423,7 +422,6 @@ class PromptsManager:
             commit_hash, timestamp, message = commit.split(" ", 2)
             timestamp = datetime.fromtimestamp(int(timestamp)).isoformat()
 
-            # Get the JSON content at this commit
             content = subprocess.run(
                 ["git", "show", f"{commit_hash}:{json_base}"],
                 cwd=json_dir,
@@ -432,14 +430,14 @@ class PromptsManager:
                 check=False
             )
             if content.returncode != 0:
-                continue  # Skip if file didn’t exist in this commit
+                continue
 
             try:
                 past_prompts = json.loads(content.stdout)
                 if key:
                     keys = key.split(".")
                     value = self._get_nested_value(past_prompts, keys)
-                    if value is not None and isinstance(value, str):  # Only include commits where the key has a prompt
+                    if value is not None and isinstance(value, str):
                         history.append({
                             "commit": commit_hash,
                             "timestamp": timestamp,
@@ -451,7 +449,7 @@ class PromptsManager:
                         "commit": commit_hash,
                         "timestamp": timestamp,
                         "message": message,
-                        "prompt": None  # Full file history doesn’t show individual prompts here
+                        "prompt": None
                     })
             except json.JSONDecodeError:
                 continue
@@ -464,19 +462,19 @@ class PromptsManager:
             print(f"Version history for '{key}' in {self.json_file}:")
 
         for entry in sorted(history, key=lambda x: x["timestamp"], reverse=True):
-            if key:
-                print(f"  - {entry['timestamp']} | {entry['commit'][:8]} | {entry['message']} | Prompt: {entry['prompt']}")
+            if key and entry["prompt"]:
+                prompt_display = entry["prompt"] if verbose == -1 else entry["prompt"][:verbose]
+                print(f"  - {entry['timestamp']} | {entry['commit'][:8]} | {entry['message']} | Prompt: {prompt_display}")
             else:
                 print(f"  - {entry['timestamp']} | {entry['commit'][:8]} | {entry['message']}")
 
         return history
 
-    def revert_version(self, commit_hash: str, key: str = None):
+    def revert_version(self, commit_hash: str, key: str = None, verbose: int = 50):
         """Revert to a specific commit, optionally for a single key."""
         json_dir = os.path.dirname(self.json_file) or "."
         json_base = os.path.basename(self.json_file)
 
-        # Get the content at the specified commit
         content = subprocess.run(
             ["git", "show", f"{commit_hash}:{json_base}"],
             cwd=json_dir,
@@ -487,7 +485,6 @@ class PromptsManager:
         past_prompts = json.loads(content.stdout)
 
         if key:
-            # Revert only the specified key
             keys = key.split(".")
             old_value = self._get_nested_value(past_prompts, keys)
             if old_value is None or not isinstance(old_value, str):
@@ -495,13 +492,13 @@ class PromptsManager:
                 return False
             if self._set_nested_value(self.prompts, keys, old_value):
                 self._save_prompts()
-                print(f"Reverted '{key}' to version from commit {commit_hash}: '{old_value}'")
+                prompt_display = old_value if verbose == -1 else old_value[:verbose]
+                print(f"Reverted '{key}' to version from commit {commit_hash}: '{prompt_display}'")
                 return True
             else:
                 print(f"Error: Could not revert '{key}' - key not found in current structure")
                 return False
         else:
-            # Revert entire file
             self.prompts = past_prompts
             self._save_prompts()
             print(f"Reverted entire {self.json_file} to commit {commit_hash}")
@@ -513,39 +510,43 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="action", help="Action to perform")
 
-    # 'scan' action
+    # 'scan' action (unchanged)
     scan_parser = subparsers.add_parser("scan", help="Scan a directory to update the prompt store")
     scan_parser.add_argument("-d", "--directory", type=str, required=True, help="Directory to scan")
     scan_parser.add_argument("-r", "--recursive", action="store_true", help="Recursively scan subdirectories")
     scan_parser.add_argument("--hard", action="store_true", help="Perform a hard update")
     scan_parser.add_argument("--verbose", action="store_true", help="Print the entire prompt store content")
 
-    # 'list' action
+    # 'list' action (unchanged)
     list_parser = subparsers.add_parser("list", help="List keys in the prompt store")
     list_parser.add_argument("-p", "--prompt", action="store_true", help="Only show keys with prompt strings")
     list_parser.add_argument("--verbose", action="store_true", help="Print the entire prompt store content")
 
-    # 'add' action
+    # 'add' action (unchanged)
     add_parser = subparsers.add_parser("add", help="Add or update a prompt for an existing key")
     add_parser.add_argument("-k", "--key", type=str, required=True, help="The key to update")
     add_parser.add_argument("-v", "--value", type=str, required=True, help="The string value to assign")
     add_parser.add_argument("--verbose", action="store_true", help="Print the entire prompt store content")
 
-    # 'delete' action
+    # 'delete' action (unchanged)
     delete_parser = subparsers.add_parser("delete", help="Delete keys from the prompt store")
     delete_parser.add_argument("-k", "--key", type=str, nargs="+", required=True, help="Keys to delete")
     delete_parser.add_argument("--verbose", action="store_true", help="Print the entire prompt store content")
 
-    # 'version' action
+    # 'version' action (updated)
     version_parser = subparsers.add_parser("version", help="List version history of prompts")
     version_parser.add_argument("-k", "--key", type=str, help="Key to show version history for")
+    version_parser.add_argument("--verbose", type=int, nargs="?", const=50, default=50,
+                                help="Print first n chars of prompt (default 50, -1 for full prompt)")
 
-    # 'revert' action
+    # 'revert' action (updated)
     revert_parser = subparsers.add_parser("revert", help="Revert to a previous version")
     revert_parser.add_argument("-c", "--commit", type=str, required=True, help="Commit hash to revert to")
     revert_parser.add_argument("-k", "--key", type=str, help="Key to revert; if omitted, reverts entire file")
+    revert_parser.add_argument("--verbose", type=int, nargs="?", const=50, default=50,
+                               help="Print first n chars of prompt (default 50, -1 for full prompt)")
 
-    # Top-level arguments
+    # Top-level arguments (unchanged)
     parser.add_argument("--verbose", action="store_true", help="Print verbose output")
     parser.add_argument("--test", action="store_true", help="Use prompts/test.json")
     parser.add_argument("-j", "--json", type=str, help="Specify a custom JSON file path")
@@ -607,12 +608,12 @@ def main():
         return
 
     if args.action == "version":
-        prompts_manager.list_versions(args.key)
+        prompts_manager.list_versions(args.key, verbose=args.verbose)
         return
 
     if args.action == "revert":
-        prompts_manager.revert_version(args.commit, args.key)
-        if args.verbose:
+        prompts_manager.revert_version(args.commit, args.key, verbose=args.verbose)
+        if args.verbose != 50:  # Only print full content if verbosity is non-default
             print(f"\nCurrent {json_file} content:")
             print(json.dumps(prompts_manager.prompts, indent=4))
         return
