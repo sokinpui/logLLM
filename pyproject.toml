@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "logllm"
+version = "0.1.0"  # Update this as your project evolves
+description = "A log analysis tool using LLMs and related technologies"
+readme = "README.md"
+requires-python = ">=3.8"  # Adjust based on your needs
+authors = [
+    { name = "Your Name", email = "your.email@example.com" },  # Replace with your details
+]
+license = { text = "MIT" }  # Or your preferred license
+dependencies = [
+    "docker-py",
+    "elasticsearch",
+    "google-cloud-aiplatform",
+    "huggingface-hub",
+    "langchain-community",
+    "langchain-core",
+    "langchain-elasticsearch",
+    "langchain-google-genai",
+    "langchain-ollama",
+    "langchain-text-splitters",
+    "langgraph",
+    "pandas",
+    "pydantic",
+    "requests",
+    "tiktoken",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-mock",
+    "black",
+    "flake8",
+    "isort",
+    "sphinx",  # For documentation
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }  # Tells setuptools to look in src/ for packages
+
+[tool.setuptools.packages.find]
+where = ["src"]  # Finds packages under src/
+include = ["logllm*"]  # Ensures logllm and submodules are included
+
+[tool.setuptools.package-data]
+"logllm" = ["prompts/*.json"]  # Includes prompts/*.json in the package
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]  # Assumes you'll add a tests/ directory
+addopts = "-v --tb=short"  # Verbose output, short traceback
+
+[tool.black]
+line-length = 88  # Default for Black, matches Python's style guide
+
+[tool.isort]
+profile = "black"  # Ensures compatibility with Black
