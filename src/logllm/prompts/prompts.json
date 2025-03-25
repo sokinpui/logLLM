@@ -1,0 +1,56 @@
+{
+    "agents": {
+        "linear_analyze_agent": {
+            "LinearAnalyzeAgentState": {},
+            "LinearAnalyzeAgent": {
+                "run": "no prompts",
+                "_build_graph": "no prompts",
+                "is_done": "no prompts",
+                "is_working_file_done": "no prompts",
+                "get_chunk": "no prompts",
+                "chunk_analysis": "no prompts",
+                "memorize": "no prompts",
+                "pop_file_id": "no prompts",
+                "setup_working_file": "no prompts"
+            }
+        },
+        "gen_query_agent": {},
+        "pre_process_agent": {
+            "PreProcessAgentState": {},
+            "PreProcessAgent": {
+                "run": "no prompts",
+                "_build_graph": "no prompts",
+                "_list_to_indices": "no prompts",
+                "interpre_event": "no prompts",
+                "gen_search_query": "no prompts",
+                "search_in_db": "no prompts",
+                "search_feedback": "no prompts"
+            },
+            "schema": {}
+        },
+        "reasoning_agent": {
+            "State": {},
+            "ReasoningAgent": {
+                "run": "no prompts",
+                "_build_graph": "no prompts",
+                "get_prompt": "no prompts",
+                "is_question": "## The Given prompt\n{original_prompt}\n\n**Task**: Determine if the given prompt can be converted into a question. Follow these steps:\n\n1. **Evaluate Input Type**:\n   - Check if the input is already a question (e.g., starts with \"What,\" \"How,\" \"Why,\" etc.).\n   - If it\u2019s not a question, determine if it contains an implicit query or intent that can be converted into a question.\n\n2. **Identify Implicit Intent**:\n   - Look for keywords or phrases that suggest an underlying question (e.g., \"I want to know\u2026,\" \"Explain\u2026,\" \"Tell me about\u2026\").\n   - Use context clues to infer the user\u2019s intent (e.g., \"It\u2019s cold here\" \u2192 \"Can you adjust the temperature?\").\n\n3. **output**:\n    - if it the input is already a question: answer yes\n    - if it is not a question:\n        - if it can be converted to a question: answer yes\n        - if it cannot be converted to a question: answer no\n",
+                "parse_input": "## The given prompt\n{original_prompt}\n\n**Task**: Determine if the given prompt can be converted into a question. If yes, rewrite it as a clear and actionable question. Follow these steps:\n\n1. **Evaluate Input Type**:\n   - Check if the input is already a question (e.g., starts with \"What,\" \"How,\" \"Why,\" etc.).\n   - If it\u2019s not a question, determine if it contains an implicit query or intent that can be converted into a question.\n\n2. **Identify Implicit Intent**:\n   - Look for keywords or phrases that suggest an underlying question (e.g., \"I want to know\u2026,\" \"Explain\u2026,\" \"Tell me about\u2026\").\n   - Use context clues to infer the user\u2019s intent (e.g., \"It\u2019s cold here\" \u2192 \"Can you adjust the temperature?\").\n\n3. **Rewrite as Question**:\n   - If the input can be converted, rewrite it as a clear, concise, and actionable question.\n   - Ensure the rewritten question aligns with the user\u2019s intent and context.\n\n4. **Output Format**:\n   - **Converted Question**: [If applicable, the rewritten question]\n",
+                "context_understanding": "## The given Question\n{question}\n\n**Task**: Analyze the given question to extract its context, domain, and potential ambiguities. Follow these steps:\n\n1. **Identify Explicit Context**:\n   - Use the \"5 Ws\" (Who, What, Where, When, Why/How) to list explicit details.\n   - Example: \"How do I fix a leaking sink?\" \u2192 What: Fixing a sink. How: Repair steps.\n\n2. **Domain Classification**:\n   - Classify the question into a broad domain (e.g., \"Home Repair,\" \"Science,\" \"Technology\").\n   - If hybrid (e.g., \"AI in healthcare\"), identify all relevant domains.\n\n3. **Ambiguity Detection**:\n   - List ambiguous terms/phrases (e.g., \"best,\" \"quickly,\" jargon like \"LLM\").\n   - For each ambiguity, propose 1\u20132 clarifying questions or assumptions.\n\n4. **Assumptions & Scope**:\n   - State assumptions needed to answer (e.g., user\u2019s location, technical skill level).\n   - Define the scope (e.g., \"Focus on cost-effective solutions\").\n\n**Output Format**:\n- **Explicit Context**: [Bullet points of 5 Ws]\n- **Domain**: [Domain + subdomains if applicable]\n- **Ambiguities**: [Term + possible meanings/clarifications]\n- **Assumptions**: [List of assumptions to proceed]\n",
+                "determine_goal": "## The given question\n{question}\n\n**Task**: Analyze the given question to determine its goal and the type of response required. Follow these steps:\n\n1. **Categorize Question Type**:\n   - Classify the question into one or more of the following types:\n     - **Factual**: Requests specific information (e.g., \"What is X?\").\n     - **Procedural**: Asks for steps or instructions (e.g., \"How do I do Y?\").\n     - **Comparative**: Compares two or more things (e.g., \"What\u2019s the difference between A and B?\").\n     - **Causal**: Explains reasons or causes (e.g., \"Why did Z happen?\").\n     - **Hypothetical**: Explores scenarios or possibilities (e.g., \"What if X happens?\").\n     - **Opinion-based**: Seeks subjective input (e.g., \"What do you think about X?\").\n\n2. **Determine Response Structure**:\n   - Based on the question type, define the structure of the expected answer:\n     - **Factual**: Concise, direct answer.\n     - **Procedural**: Step-by-step instructions.\n     - **Comparative**: Point-by-point comparison.\n     - **Causal**: Explanation with logical flow.\n     - **Hypothetical**: Scenario analysis with assumptions.\n     - **Opinion-based**: Balanced perspective with reasoning.\n\n3. **Clarify Goal**:\n   - Identify the user\u2019s underlying goal (e.g., \"Why is the sky blue?\" \u2192 Understand light scattering).\n   - If the goal is unclear, propose 1\u20132 clarifying questions.\n",
+                "decompose_question": "## The given Question\n{question}\n\n## Context\n{context}\n\n**Task**: Break down the given question into smaller, logically connected sub-questions. Use the provided context to guide the decomposition process. Follow these steps:\n\n1. **Review Context**:\n   - Use this context to ensure the decomposition aligns with the user\u2019s intent and domain.\n\n3. **Decompose into Sub-Questions**:\n   - Use logical reasoning to split the question into smaller, answerable sub-questions.\n   - Apply one or more of the following decomposition strategies:\n     - **Divide and Conquer**: Break into independent sub-tasks (e.g., \"What is blockchain?\" \u2192 \"How does it work?\").\n     - **Backward Chaining**: Start from the goal and identify prerequisites (e.g., \"Why is transparency important in supply chains?\").\n     - **Schema-Based**: Use domain-specific templates (e.g., for \"How does X work?\" \u2192 \"What is X?\" \u2192 \"What are its components?\" \u2192 \"How do they interact?\").\n\n4. **Ensure Logical Flow**:\n   - Arrange sub-questions in a logical sequence (e.g., foundational \u2192 advanced).\n   - Ensure each sub-question is necessary to answer the main question.\n",
+                "solve_sub_question": "## sub question:\n{sub_question}\n\n**Task**: Answer the given sub-question based on the provided context, goal, and assumptions. Follow these steps:\n\n2. **Answer the Sub-Question**:\n   - Provide a concise and accurate answer to the sub-question.\n   - Use trusted knowledge sources or logical reasoning.\n   - If the answer requires assumptions, state them explicitly.\n",
+                "is_sub_question_empty": "no prompts",
+                "combine_sub_answer": "## Goal:\n{goal}\n\n## context:\n{context}\n\n**Task**: Combine the following sub-answers into a single, coherent response to the main question. Follow these steps:\n\n1. **Review Context and Goal**:\n\n2. **Organize Sub-Answers**:\n   - Arrange the sub-answers in a logical sequence that builds toward answering the main question.\n   - Use connectors (e.g., \"because,\" \"therefore,\" \"as a result\") to maintain flow and coherence.\n\n3. **Synthesize Information**:\n   - Combine the sub-answers into a single narrative, avoiding redundancy.\n   - Highlight key insights or conclusions that emerge from the sub-answers.\n\n4. **Validate the Response**:\n   - Ensure the final response addresses all parts of the main question.\n   - Check for consistency and logical flow.\n\n**all sub-answers**: {messages}\n",
+                "formulate_response": "## synthesized sub-answers:\n{combined_answer}\n\n**Task**: Formulate a final response based on the synthesized sub-answers. Follow these steps:\n\n2. **Structure the Response**:\n   - Begin with a **brief introduction** that restates the main question or intent.\n   - Organize the body of the response into **logical sections** (e.g., overview, details, examples).\n   - End with a **conclusion** that summarizes key points or provides actionable insights.\n\n3. **Tailor the Tone and Depth**:\n   - Adjust the tone (e.g., formal, casual) and depth (e.g., technical, simple) based on the user\u2019s assumed knowledge level and preferences.\n   - Use **connectors** (e.g., \"because,\" \"therefore,\" \"for example\") to maintain flow and coherence.\n\n4. **Validate the Response**:\n   - Ensure the response addresses all parts of the main question.\n   - Check for clarity, conciseness, and logical flow.\n"
+            },
+            "Schema": {}
+        },
+        "agent_abc": {
+            "Agent": {
+                "_build_graph": "no prompts",
+                "run": "no prompts"
+            }
+        }
+    }
+}
