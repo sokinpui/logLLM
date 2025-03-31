@@ -1,0 +1,16 @@
+docker-py
+elasticsearch
+google-cloud-aiplatform
+huggingface-hub
+langchain-community
+langchain-core
+langchain-elasticsearch
+langchain-google-genai
+langchain-ollama
+langchain-text-splitters
+langgraph
+pandas
+pydantic
+requests
+tiktoken
+

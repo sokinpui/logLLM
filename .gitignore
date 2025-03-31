@@ -12,7 +12,13 @@ build/
 # Virtual environments
 venv/
 env/
+.env/
 .venv/
+.direnv/
+
+.DS_Store
+
+.envrc
 
 # Temporary files
 *tmp*
