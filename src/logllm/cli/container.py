@@ -1,6 +1,6 @@
 # src/logllm/cli/container.py
 import argparse
-from logllm.utils.container_manger import DockerManager
+from logllm.utils.container_manager import DockerManager
 from logllm.config import config as cfg
 from logllm.utils.logger import Logger
 
@@ -10,7 +10,6 @@ def handle_container_start(args):
     logger.info("Executing container start...")
     # --- Logic adapted from container_manger.main() ---
     elastic_manager = DockerManager()
-    # elastic_manager._start_daemon() # Daemon start is handled in DockerManager init
 
     elastic_search_image = cfg.ELASTIC_SEARCH_IMAGE
     elastic_search_network = cfg.DOCKER_NETWORK_NAME

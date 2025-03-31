@@ -7,6 +7,7 @@ import platform
 import subprocess
 import os
 import docker
+from docker.errors import NotFound, ImageNotFound, APIError, DockerException #
 
 class ContainerManager(ABC):
     @abstractmethod
