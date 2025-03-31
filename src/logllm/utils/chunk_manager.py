@@ -1,6 +1,6 @@
 from typing import Any, Callable
 
-from database import ElasticsearchDatabase
+from .database import ElasticsearchDatabase
 
 class ESTextChunkManager:
     """

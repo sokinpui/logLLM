@@ -4,8 +4,8 @@ import os
 from elasticsearch.exceptions import NotFoundError
 from datetime import datetime
 
-from config import config as cfg
-import data_struct
+from logllm.config import config as cfg
+from . import data_struct
 from .database import Database, ElasticsearchDatabase
 from .logger import Logger
 from .data_struct import LogFile, Event

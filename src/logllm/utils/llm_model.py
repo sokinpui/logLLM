@@ -11,7 +11,7 @@ from llama_cpp import Llama
 from contextlib import redirect_stdout, redirect_stderr
 
 from .logger import Logger
-from config import config as cfg
+from logllm.config import config as cfg
 
 
 class LLMModel:
