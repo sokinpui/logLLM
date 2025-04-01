@@ -129,7 +129,7 @@ class QwenModel(LLMModel):
 
 def main():
     # test the Gemini model
-    model = QwenModel()
+    model = GeminiModel()
     prompt = "What is the capital of France?"
     print(f"token count: {model.token_count(prompt)}")
     print(model.model.invoke(prompt))
