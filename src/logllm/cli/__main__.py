@@ -1,7 +1,6 @@
 # cli.py
 import argparse
 import sys
-import os
 
 try:
     from logllm.cli import container, collect
