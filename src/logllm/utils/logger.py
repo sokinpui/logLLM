@@ -1,6 +1,6 @@
 import logging
 
-from logllm.config import config as cfg
+from ..config import config as cfg
 
 class Logger:
     _instance = None

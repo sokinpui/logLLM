@@ -4,7 +4,7 @@ from elasticsearch import Elasticsearch
 from langchain_elasticsearch import ElasticsearchStore
 
 from .logger import Logger
-from logllm.config import config as cfg
+from ..config import config as cfg
 
 class Database(ABC):
 

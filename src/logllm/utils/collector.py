@@ -4,7 +4,7 @@ import os
 from elasticsearch.exceptions import NotFoundError
 from datetime import datetime
 
-from logllm.config import config as cfg
+from ..config import config as cfg
 from . import data_struct
 from .database import Database, ElasticsearchDatabase
 from .logger import Logger

@@ -1,9 +1,9 @@
 # src/logllm/cli/collect.py
 import argparse
 import os
-from logllm.utils.collector import Collector
-from logllm.utils.database import ElasticsearchDatabase
-from logllm.utils.logger import Logger
+from ..utils.collector import Collector
+from ..utils.database import ElasticsearchDatabase
+from ..utils.logger import Logger
 
 logger = Logger()
 

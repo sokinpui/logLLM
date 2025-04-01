@@ -3,8 +3,8 @@ import argparse
 import sys
 
 try:
-    from logllm.cli import container, collect
-    from logllm.utils.logger import Logger # Optional: for logging CLI actions
+    from ..cli import container, collect
+    from ..utils.logger import Logger # Optional: for logging CLI actions
 except ImportError as e:
     print(f"Import Error: {e}")
     sys.exit(1)

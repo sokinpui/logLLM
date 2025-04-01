@@ -2,7 +2,7 @@ from datetime import datetime
 from dataclasses import dataclass, asdict
 
 from .database import ElasticsearchDatabase as eldb
-from logllm.config import config as cfg
+from ..config import config as cfg
 
 @dataclass
 class BaseData:

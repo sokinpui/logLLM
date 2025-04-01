@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 
 from .logger import Logger
-from logllm.config import config as cfg
+from ..config import config as cfg
 
 import platform
 import subprocess

@@ -1,8 +1,8 @@
 # src/logllm/cli/container.py
 import argparse
-from logllm.utils.container_manager import DockerManager
-from logllm.config import config as cfg
-from logllm.utils.logger import Logger
+from ..utils.container_manager import DockerManager
+from ..config import config as cfg
+from ..utils.logger import Logger
 
 logger = Logger() # Use the application's shared logger
 
