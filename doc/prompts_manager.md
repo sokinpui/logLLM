@@ -264,7 +264,7 @@ keys = pm.list_prompts()
 print("All keys:", keys)
 
 # Add a prompt
-pm.add_prompt("tests.t.TextClass.run", "Hello, {name}")
+pm.add_prompt("Hello, {name}")
 
 # List versions
 history = pm.list_versions("tests.t.TextClass.run", verbose=-1)
@@ -277,6 +277,9 @@ pm.revert_version("abc12345", "tests.t.TextClass.run")
 pm.delete_keys(["tests.t.TextClass.run"])
 
 # Get a prompt
+prompt = pm.get_prompt("tests.t.TextClass.run", name="Alice")
+
+# or in class, metadata resolved at runtime no need to explicitly pass
 prompt = pm.get_prompt("tests.t.TextClass.run", name="Alice")
 print("Prompt:", prompt)
 ```
