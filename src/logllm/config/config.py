@@ -98,6 +98,15 @@ def get_pre_process_index(event_id : int) -> str:
     """
     return f"pre_process_{event_id}"
 
+def get_parsed_log_storage_index(group: str) -> str:
+    """
+    Generates an Elasticsearch index name for storing parsed/structured logs
+    based on the original log group name.
+    """
+    # Ensure group name is filesystem/index friendly (basic cleaning)
+    clean_group = group.replace(" ", "_").replace("/", "_").lower()
+    return f"parsed_log_{clean_group}"
+
 # Maximum Memory context sie for analyze agent to store summary
 MEMRORY_TOKENS_LIMIT = 20000
 # ==========================

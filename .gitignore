@@ -28,6 +28,7 @@ tmp.py
 # Logs
 *.log
 logs/
+log
 results/
 
 # Dependency and build artifacts
