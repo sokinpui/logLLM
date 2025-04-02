@@ -35,11 +35,11 @@ class LogFile:
     file_id = 0
 
     def __init__(self, filename : str, parent: str):
-        LogFile.file_id += 1
         self.id = LogFile.file_id
+        LogFile.file_id += 1
 
         self.belongs_to = parent
-        self.name = filename
+        self.path = filename
         self.description = ""
         self.related_events = []
 

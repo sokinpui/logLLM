@@ -21,6 +21,37 @@ class Collector:
         self._dir = dir
         self.collected_files = self.collect_logs(dir)
 
+        _db = ElasticsearchDatabase()
+        groups = self.group_files(self.collected_files)
+        self.insert_group_to_db(groups, _db)
+
+    def insert_group_to_db(self, groups : dict[str, list[str]], db: Database):
+        ## delete the index
+        db.instance.indices.delete(index=cfg.INDEX_GROUP_INFOS, ignore=[400, 404])
+        id = 0
+        for group, files in groups.items():
+            print(group)
+            doc = {
+                "group": group,
+                "files": files,
+                "id": id
+            }
+            id += 1
+            db.insert(doc, cfg.INDEX_GROUP_INFOS)
+
+    def group_files(self, files: list[LogFile]) -> dict[str, list[str]]:
+        """
+        group files by their parent directory
+        """
+        group = {}
+        for file in files:
+            if file.belongs_to in group:
+                group[file.belongs_to].append(file.path)
+            else:
+                group[file.belongs_to] = [file.path]
+
+        return group
+
     def collect_logs(self, directory: str) -> list[LogFile]:
 
         # remove the tailing slash
@@ -36,25 +67,26 @@ class Collector:
             item_path = os.path.join(directory, item)
 
             if os.path.isfile(item_path):
-                item_path = os.path.abspath(item_path)
-                log_file = LogFile(item_path, os.path.basename(directory))
-                log_files.append(log_file)
+                if item.lower().endswith(".log"):
+                    item_path = os.path.abspath(item_path)
+                    log_file = LogFile(item_path, os.path.basename(directory))
+                    log_files.append(log_file)
                 continue
 
             for root, dirs, files in os.walk(item_path):
                 dirs[:] = [d for d in dirs if not d.startswith('.')]
 
                 for log in files:
+                    if log.lower().endswith(".log"):
+                        try:
+                            path = os.path.join(root, log)
+                            log_path = os.path.abspath(path)
 
-                    try:
-                        path = os.path.join(root, log)
-                        log_path = os.path.abspath(path)
-
-                        log_file = LogFile(log_path, os.path.basename(item_path))
-                        log_files.append(log_file)
-                    except Exception as e:
-                        self._logger.error(f"Error collecting log file {log}: {e}")
-                        exit(1)
+                            log_file = LogFile(log_path, os.path.basename(item_path))
+                            log_files.append(log_file)
+                        except Exception as e:
+                            self._logger.error(f"Error collecting log file {log}: {e}")
+                            exit(1)
 
         return log_files
 
@@ -137,12 +169,12 @@ class Collector:
             try:
                 count = 0
 
-                with open(file.name, 'r') as f:
+                with open(file.path, 'r') as f:
 
                     try:
                         last_line_read = self._get_last_line_read(file, db)
                     except Exception as e:
-                        self._logger.info(f"Error getting last line read for log file {file.name}: {e}")
+                        self._logger.info(f"Error getting last line read for log file {file.path}: {e}")
                         last_line_read = 0
 
                     for line in f:
@@ -155,7 +187,7 @@ class Collector:
                         line_of_log = data_struct.LineOfLogFile(
                                 content=line,
                                 line_number=count,
-                                name=file.name,
+                                name=file.path,
                                 id=file.id,
                                 timestamp=datetime.now()
                         )
@@ -180,12 +212,12 @@ class Collector:
 
                 total_lines_procced = count - last_line_read
                 if total_lines_procced > 0:
-                    self._logger.info(f"collector: Inserted {total_lines_procced} lines of {file.name}:id {file.id}, range: {last_line_read} - {count}")
+                    self._logger.info(f"collector: Inserted {total_lines_procced} lines of {file.path}:id {file.id}, range: {last_line_read} - {count}")
 
                 self._save_last_line_read(file, db, count)
 
             except Exception as e:
-                self._logger.error(f"Error inserting lines of {file.name}: {e}")
+                self._logger.error(f"Error inserting lines of {file.path}: {e}")
                 exit(1)
 
 
@@ -209,7 +241,7 @@ class Collector:
         last_line_status = data_struct.LastLineRead(
                 last_line_read=line_number,
                 id=log_file.id,
-                name=log_file.name
+                name=log_file.path
         )
         update_data = {
             "doc": last_line_status.to_dict(),
@@ -225,7 +257,7 @@ class Collector:
         except NotFoundError:
             db.insert(data=last_line_status.to_dict(), index=cfg.INDEX_LAST_LINE_STATUS)
         except Exception as e:
-            self._logger.error(f"Error updating last line read for log file {log_file.name}: {e}")
+            self._logger.error(f"Error updating last line read for log file {log_file.path}: {e}")
             exit(1)
 
     def _clear_records(self, db: Database):

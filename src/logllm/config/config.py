@@ -75,6 +75,8 @@ INDEX_EVENTS_STORAGE = "events"
 
 INDEX_VECTOR_STORE = "vector_store"
 
+INDEX_GROUP_INFOS = "group_infos"
+
 # ==========================
 
 # LLM model
