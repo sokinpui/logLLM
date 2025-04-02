@@ -36,22 +36,22 @@ class SimpleDrainLogParserAgent:
             raise ValueError("Valid 'log_file_path' must be provided in initial state")
 
         # Set default state values
-        initial_state.setdefault("log_format", "")
-        initial_state.setdefault("output_csv_path", "")
-
         return self.graph.invoke(initial_state)
 
     def _build_graph(self) -> CompiledGraph:
-        """Build the state graph with simplified workflow."""
+        """Build the state graph for single-file parsing."""
         workflow = StateGraph(SimpleDrainLogParserState)
 
-        # Define nodes
         workflow.add_node("get_log_sample", self.get_log_sample)
         workflow.add_node("generate_log_format", self.generate_log_format)
         workflow.add_node("run_drain_parser", self.run_drain_parser)
 
-        # Define edges
         workflow.add_edge(START, "get_log_sample")
+        workflow.add_conditional_edges(
+            START,
+            self.should_generate_format,
+            {"generate_log_format": "get_log_sample", "run_drain_parser": "run_drain_parser"}
+        )
         workflow.add_edge("get_log_sample", "generate_log_format")
         workflow.add_edge("generate_log_format", "run_drain_parser")
         workflow.add_edge("run_drain_parser", END)
@@ -73,6 +73,10 @@ class SimpleDrainLogParserAgent:
         except Exception as e:
             self._logger.error(f"Failed to sample {log_file_path}: {e}")
             return {"sample_logs": ""}
+
+    def should_generate_format(self, state: SimpleDrainLogParserState) -> str:
+        """Check if log format generation is needed."""
+        return "generate_log_format" if state["log_format"] is None else "run_drain_parser"
 
     def generate_log_format(self, state: SimpleDrainLogParserState) -> dict:
         """Generate log format using LLM based on sampled logs."""
@@ -141,115 +145,165 @@ class SimpleDrainLogParserAgent:
             self._logger.error(f"Drain parsing failed for {log_file_path}: {e}")
             return {"output_csv_path": ""}
 
-
-from typing import List
+from langgraph.graph import StateGraph, START, END
 from ..utils.database import ElasticsearchDatabase
-from ..config import config as cfg
-from ..utils.data_struct import LogFile  # Import your LogFile class
 
-class RecursiveDrainLogParserState(TypedDict):
-    input_directory: str       # Input: Directory containing log files
-    log_files: List[LogFile]   # Intermediate: List of LogFile objects
-    processed_files: List[dict] # Output: List of {path: str, csv_path: str, group: str}
+from typing import List, Dict, Optional
 
-class RecursiveDrainLogParserAgent:
-    def __init__(self, model: LLMModel, db: ElasticsearchDatabase):
-        self._model = model
-        self._db = db
+class GroupLogParserState(TypedDict):
+    groups: Dict[str, List[str]]       # Group name -> List of file paths
+    current_group: Optional[str]       # Current group being processed
+    current_file: Optional[str]        # Current file being processed
+    log_format: Optional[str]          # Log format for the current group
+    progress: Dict[str, List[str]]     # Group name -> List of generated CSV paths
+
+class GroupLogParserAgent:
+    def __init__(self, model, es_host: str = "localhost:9200"):
         self._logger = Logger()
-        self._simple_parser = SimpleDrainLogParserAgent(model)  # Sub-agent
+        self._db = ElasticsearchDatabase()  # Connects to Elasticsearch via config
+        self._simple_parser_agent = SimpleDrainLogParserAgent(model)
         self.graph = self._build_graph()
 
     def run(self, initial_state: dict) -> dict:
-        """Run the agent with an initial state containing the input directory."""
-        if "input_directory" not in initial_state or not os.path.isdir(initial_state["input_directory"]):
-            raise ValueError("Valid 'input_directory' must be provided in initial state")
-
-        initial_state.setdefault("log_files", [])
-        initial_state.setdefault("processed_files", [])
-
+        """Run the agent to process all log files in groups."""
         return self.graph.invoke(initial_state)
 
-    def _build_graph(self) -> 'CompiledGraph':
-        """Build the state graph for recursive parsing."""
-        workflow = StateGraph(RecursiveDrainLogParserState)
+    def _build_graph(self) -> CompiledGraph:
+        """Build the state graph for processing all log files in groups."""
+        workflow = StateGraph(GroupLogParserState)
 
-        workflow.add_node("collect_log_files", self.collect_log_files)
-        workflow.add_node("parse_and_ingest", self.parse_and_ingest)
+        # Add nodes
+        workflow.add_node("fetch_groups", self.fetch_groups)
+        workflow.add_node("select_next_group", self.select_next_group)
+        workflow.add_node("select_next_file", self.select_next_file)
+        workflow.add_node("parse_file", self.parse_file)
 
-        workflow.add_edge(START, "collect_log_files")
-        workflow.add_edge("collect_log_files", "parse_and_ingest")
-        workflow.add_edge("parse_and_ingest", END)
+        # Add edges
+        workflow.add_edge(START, "fetch_groups")
+        workflow.add_edge("fetch_groups", "select_next_group")
+        workflow.add_edge("select_next_group", "select_next_file")
+        workflow.add_conditional_edges(
+            "select_next_file",
+            self.should_parse_file,
+            {
+                "parse_file": "parse_file",
+                "select_next_group": "select_next_group",
+                "end": END
+            }
+        )
+        workflow.add_edge("parse_file", "select_next_file")
 
         return workflow.compile()
 
-    def collect_log_files(self, state: RecursiveDrainLogParserState) -> dict:
-        """Recursively collect all .log files as LogFile objects, grouping by first subdirectory."""
-        input_dir = state["input_directory"]
-        self._logger.info(f"Collecting .log files from {input_dir}")
+    def fetch_groups(self, state: GroupLogParserState) -> dict:
+        """Fetch group information from the database using scroll_search."""
+        self._logger.info("Fetching group information from the database using scroll_search")
+        try:
+            query = {"query": {"match_all": {}}}
+            groups_data = self._db.scroll_search(query=query, index="group_infos")
+            groups = {doc["_source"]["group"]: doc["_source"]["files"] for doc in groups_data}
+            self._logger.info(f"Found groups: {list(groups.keys())}")
+            return {
+                "groups": groups,
+                "progress": {group: [] for group in groups},
+                "current_group": None,
+                "current_file": None,
+                "log_format": None
+            }
+        except Exception as e:
+            self._logger.error(f"Failed to fetch groups: {e}")
+            return {
+                "groups": {},
+                "progress": {},
+                "current_group": None,
+                "current_file": None,
+                "log_format": None
+            }
 
-        log_files = []
-        input_dir_abs = os.path.abspath(input_dir)  # Normalize input_dir
+    def select_next_group(self, state: GroupLogParserState) -> dict:
+        """Select the next group with unprocessed files and reset log_format."""
+        groups = state["groups"]
+        progress = state["progress"]
+        remaining_groups = [g for g in groups if len(progress[g]) < len(groups[g])]
+        if not remaining_groups:
+            self._logger.info("All groups processed")
+            return {"current_group": None, "log_format": None}
+        current_group = remaining_groups[0]  # Take the first available group
+        self._logger.info(f"Selected next group: {current_group}")
+        return {"current_group": current_group, "log_format": None}
 
-        for root, _, files in os.walk(input_dir):
-            if os.path.basename(root).startswith('.'):
-                continue
-            # Compute the group as the first subdirectory under input_dir
-            rel_path = os.path.relpath(root, input_dir_abs)  # Path relative to input_dir
-            if rel_path == '.':  # If root is input_dir itself
-                group = os.path.basename(input_dir_abs)  # Fallback to input_dir name
-            else:
-                group = rel_path.split(os.sep)[0]  # First subdirectory
+    def select_next_file(self, state: GroupLogParserState) -> dict:
+        """Select the next unprocessed file in the current group."""
+        current_group = state["current_group"]
+        if current_group is None:
+            return {"current_file": None}
+        group_files = state["groups"][current_group]
+        parsed_count = len(state["progress"][current_group])
+        if parsed_count < len(group_files):
+            current_file = group_files[parsed_count]
+            self._logger.info(f"Selected next file: {current_file} in group {current_group}")
+            return {"current_file": current_file}
+        return {"current_file": None}
 
-            for file in files:
-                if file.endswith('.log') and not file.startswith('.'):
-                    file_path = os.path.abspath(os.path.join(root, file))
-                    log_file = LogFile(filename=file_path, parent=group)
-                    log_files.append(log_file)
+    def parse_file(self, state: GroupLogParserState) -> dict:
+        """Parse the current file using the SimpleDrainLogParserAgent subgraph."""
+        current_group = state["current_group"]
+        current_file = state["current_file"]
+        log_format = state["log_format"]
+        progress = state["progress"].copy()
 
-        self._logger.info(f"Found {len(log_files)} .log files")
-        return {"log_files": log_files}
+        is_first_file = len(progress[current_group]) == 0
+        subgraph_state = {
+            "log_file_path": current_file,
+            "log_format": None if is_first_file else log_format,
+            "output_csv_path": "",
+            "sample_logs": ""
+        }
 
-    def parse_and_ingest(self, state: RecursiveDrainLogParserState) -> dict:
-        """Parse each log file with SimpleDrainLogParserAgent and ingest into Elasticsearch."""
-        log_files = state["log_files"]
-        processed_files = []
+        self._logger.info(f"Invoking subgraph to parse file: {current_file} with log_format: {log_format}")
+        try:
+            result = self._simple_parser_agent.run(subgraph_state)
+        except Exception as e:
+            self._logger.error(f"Failed to parse file {current_file}: {e}")
+            return {}
 
-        for log_file in log_files:
-            group = log_file.belongs_to  # Use LogFile's parent as group
-            index = cfg.get_parsed_log_storage_index(group)  # e.g., "parsed_log_hadoop"
+        if is_first_file and result["log_format"]:
+            log_format = result["log_format"]
+            self._logger.info(f"Generated log format for group {current_group}: {log_format}")
 
-            # Parse the file using the sub-agent
-            simple_state = {"log_file_path": log_file.name}
-            result = self._simple_parser.run(simple_state)
-            csv_path = result["output_csv_path"]
+        if result["output_csv_path"]:
+            progress[current_group].append(result["output_csv_path"])
+            self._logger.info(f"Generated CSV for {current_file}: {result['output_csv_path']}")
 
-            if csv_path:
-                self._logger.info(f"Processing {log_file.name} -> {csv_path} for index {index}")
-                processed_files.append({"path": log_file.name, "csv_path": csv_path, "group": group})
+        return {"log_format": log_format, "progress": progress}
 
-                # Ensure index exists
-                if not self._db.instance.indices.exists(index=index):
-                    self._db.instance.indices.create(index=index)
-
-                # Ingest CSV into Elasticsearch
-                try:
-                    df = pd.read_csv(csv_path)
-                    for record in df.to_dict(orient="records"):
-                        cleaned_record = {k: (None if pd.isna(v) else v) for k, v in record.items()}
-                        self._db.insert(cleaned_record, index)
-                    self._logger.info(f"Ingested {len(df)} records from {csv_path} into {index}")
-                except Exception as e:
-                    self._logger.error(f"Failed to ingest {csv_path} into {index}: {e}")
-
-        return {"processed_files": processed_files}
+    def should_parse_file(self, state: GroupLogParserState) -> str:
+        """Determine the next step after selecting a file."""
+        if state["current_file"] is not None:
+            return "parse_file"
+        elif state["current_group"] is not None:
+            return "select_next_group"
+        else:
+            return "end"
 
 # Example usage
 if __name__ == "__main__":
-    from ..utils.llm_model import GeminiModel  # Adjust import based on your structure
-    model = GeminiModel()  # Assumes your LLMModel implementation
-    agent = SimpleDrainLogParserAgent(model)
+    from src.logllm.utils.llm_model import GeminiModel
 
-    state = {"log_file_path": "logs/ssh/SSH.log"}
-    result = agent.run(state)
-    print(f"Output CSV: {result['output_csv_path']}")
+    model = GeminiModel()
+    agent = GroupLogParserAgent(model=model)
+
+    initial_state = {
+        "groups": {},
+        "current_group": None,
+        "current_file": None,
+        "log_format": None,
+        "progress": {}
+    }
+
+    result = agent.run(initial_state)
+    print("Processing complete. Output CSV paths:")
+    for group, csv_paths in result["progress"].items():
+        print(f"Group {group}:")
+        for csv_path in csv_paths:
+            print(f"  {csv_path}")
