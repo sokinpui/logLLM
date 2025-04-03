@@ -25,7 +25,7 @@ class SimpleDrainLogParserState(TypedDict):
     sample_logs: str
 
 class SimpleDrainLogParserAgent:
-    SAMPLE_SIZE = 50
+    SAMPLE_SIZE = 20
 
     def __init__(self, model: LLMModel):
         self._model = model
@@ -275,14 +275,14 @@ class GroupLogParserAgent:
                          self._logger.warning(f"Parsing ultimately failed for {os.path.basename(file_path)} in group '{group}'. Check previous logs for details.")
                          # --- Optional Fallback: Try File-Specific Format ---
                          # Uncomment below to try regenerating format specifically for this file
-                         # self._logger.info(f"Attempting fallback: Generate format specifically for {os.path.basename(file_path)}")
-                         # fallback_state: SimpleDrainLogParserState = { "log_file_path": file_path, "log_format": None, "output_csv_path": "", "sample_logs": ""}
-                         # fallback_result = self._simple_parser_agent.run(fallback_state)
-                         # if fallback_result.get("output_csv_path"):
-                         #     self._logger.info(f"Fallback parsing successful for {os.path.basename(file_path)}")
-                         #     progress[group].append(fallback_result["output_csv_path"])
-                         # else:
-                         #     self._logger.error(f"Fallback parsing also failed for {os.path.basename(file_path)}")
+                         self._logger.info(f"Attempting fallback: Generate format specifically for {os.path.basename(file_path)}")
+                         fallback_state: SimpleDrainLogParserState = { "log_file_path": file_path, "log_format": None, "output_csv_path": "", "sample_logs": ""}
+                         fallback_result = self._simple_parser_agent.run(fallback_state)
+                         if fallback_result.get("output_csv_path"):
+                             self._logger.info(f"Fallback parsing successful for {os.path.basename(file_path)}")
+                             progress[group].append(fallback_result["output_csv_path"])
+                         else:
+                             self._logger.error(f"Fallback parsing also failed for {os.path.basename(file_path)}")
                          # --- End Optional Fallback ---
 
 
@@ -312,7 +312,7 @@ class GroupLogParserAgent:
         # Construct the progress line
         # Use carriage return \r to overwrite the line. Add spaces at the end to clear previous longer filenames.
         clear_len = 80 # Estimate line length to clear
-        progress_line = f"\rProgress: [{bar}] {percentage}% ({current}/{total}) Processing: {display_file:<{max_filename_len+2}}"
+        progress_line = f"\rProgress: [{bar}] {percentage}% ({current}/{total}) Processing: {display_file:<{max_filename_len+2}}\n"
         progress_line += " " * (clear_len - len(progress_line)) # Pad with spaces
 
         sys.stdout.write(progress_line)
