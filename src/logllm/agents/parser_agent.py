@@ -139,11 +139,28 @@ class SimpleDrainLogParserAgent:
         try:
             parser = LogParser(
                 log_format=log_format, indir=dir_name, outdir=dir_name, depth=4, st=0.5,
-                rex=[ # Keep refined regex list
-                    r'application_\d+_\d+', r'container_\d+_\d+_\d+_\d+', r'job_\d+_\d+',
-                    r'(?:[a-zA-Z0-9-]+\.)+[a-zA-Z_][a-zA-Z0-9_]+', r'blk_(|-)[0-9]+',
-                    r'(/|)([0-9]+\.){3}[0-9]+(:[0-9]+|)(:|)',
-                    r'(?<=[^A-Za-z0-9])(\-?\+?\d+)(?=[^A-Za-z0-9])|\b\d+\b',
+                rex = [
+                    # IDs (Hadoop/Spark specific - adjust if needed)
+                    r'application_\d+_\d+',
+                    r'container_\d+_\d+_\d+_\d+',
+                    r'job_\d+_\d+',
+                    r'task_\d+_m_\d+', # Map task
+                    r'task_\d+_r_\d+', # Reduce task
+                    # Java Exceptions/Class paths (match common patterns)
+                    r'\b[a-zA-Z0-9_]+\.[a-zA-Z0-9._]+\b', # Package/Class names
+                    r'(\w+\.){2,}\w+(Exception|Error)', # Exception names
+                    # Network addresses
+                    r'(?:(?:[0-9]{1,3}\.){3}[0-9]{1,3})', # IPv4
+                    r'(?:(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|::1)', # Basic IPv6
+                    # Paths (simple version)
+                    r'(?:/[a-zA-Z0-9._-]+)+',
+                    # Block IDs
+                    r'blk_(?:-?\d+)+',
+                    # Hexadecimal values
+                    r'0x[0-9a-fA-F]+',
+                    # Other common numbers (placed later)
+                    r'\b\d+\.\d+\b', # Floating point
+                    r'(?<=[^A-Za-z0-9])(\-?\+?\d+)(?=[^A-Za-z0-9])|\b\d+\b', # Integers
                 ]
             )
             self._logger.info(f"Running Drain on {base_name} with format: {log_format}")

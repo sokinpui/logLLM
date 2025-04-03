@@ -145,10 +145,13 @@ class GeminiModel(LLMModel):
     Gemini model implementation using the direct google-generativeai API,
     with Pydantic schema support and improved rate limiting.
     """
-    def __init__(self):
+    def __init__(self, model_name : str | None = None):
         super().__init__()
         self.context_size = 1000000 # Example context size
-        self.model_name = cfg.GEMINI_LLM_MODEL
+        if model_name:
+            self.model_name = model_name
+        else:
+            self.model_name = cfg.GEMINI_LLM_MODEL
 
         api_model_name_key = self.model_name.split('/')[-1]
         self.rpm_limit = MODEL_RPM_LIMITS.get(api_model_name_key, MODEL_RPM_LIMITS["default"])
@@ -294,7 +297,7 @@ def main():
     cfg.LOGGER_NAME = "test_llm_direct"
     cfg.LOG_FILE = "test_llm_direct.log"
     # Ensure model name in config is valid for the API, e.g., "gemini-1.5-flash-latest"
-    cfg.GEMINI_LLM_MODEL = "gemini-1.5-flash-latest"
+    cfg.GEMINI_LLM_MODEL = "gemma-3-27b-it"
 
     if 'GENAI_API_KEY' not in os.environ:
         print("Error: GENAI_API_KEY environment variable not set.")
@@ -339,6 +342,8 @@ def main():
 
     except Exception as e:
         print(f"\nAn error occurred: {e}")
+        gemini_model = GeminiModel()
+        print(gemini_model.generate(test_prompt))
         import traceback
         traceback.print_exc()
 
