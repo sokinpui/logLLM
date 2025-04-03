@@ -10,9 +10,12 @@ from langchain_ollama import OllamaEmbeddings
 from llama_cpp import Llama
 from contextlib import redirect_stdout, redirect_stderr
 
+from langchain_ollama.llms import OllamaLLM
+
+import time
+
 from .logger import Logger
 from ..config import config as cfg
-
 
 class LLMModel:
     """
@@ -52,7 +55,7 @@ class GeminiModel(LLMModel):
 
         self.context_size = 100000
 
-        model = cfg.GEMINI_LLM_MODEL
+        model_name = cfg.GEMINI_LLM_MODEL
         api_key = os.environ['GENAI_API_KEY']
         if api_key is None:
             self._logger.error("Please define GENAI_API_KEY in the environment variable")
@@ -60,17 +63,16 @@ class GeminiModel(LLMModel):
         os.environ["GOOGLE_API_KEY"] = api_key
 
         try:
-            self.model = ChatGoogleGenerativeAI(model=model, temperature=0)
+            self.model = ChatGoogleGenerativeAI(model=model_name, temperature=0, verbose=False)
 
             # set the embedding model
             self.embedding = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
 
-            self._logger.info(f"Gemini model {model} is using, Gemini model initialized")
+            self._logger.info(f"Gemini model {model_name} is using, Gemini model initialized")
         except Exception as e:
             self._logger.error(f"Error in initializing Gemini model: {e}")
 
     def token_count(self, prompt: str | None) -> int:
-
         if prompt is None:
             return 0
 
@@ -80,13 +82,16 @@ class GeminiModel(LLMModel):
         return result.total_tokens
 
     def generate(self, prompt, schema=None):
-        result = super().generate(prompt, schema)
+        if schema:
+            model = self.model.with_structured_output(schema, include_raw=False)
+            structured_output = model.invoke(prompt)
+            return structured_output
 
-        import time
+        response = self.model.invoke(prompt)
+        content = response.content
         time.sleep(5)
 
-        return result
-
+        return content
 
 
 class QwenModel(LLMModel):
@@ -112,11 +117,11 @@ class QwenModel(LLMModel):
             self._llm_raw = Llama(model_path=path, n_ctx=self.context_size, verbose=False)
             self.embedding = OllamaEmbeddings(model="qwen2.5")
 
-    def token_count(self, text: str | None) -> int:
-        if text is None:
+    def token_count(self, prompt: str | None) -> int:
+        if prompt is None:
             return 0
 
-        tokens = self._llm_raw.tokenize(text.encode("utf-8"))
+        tokens = self._llm_raw.tokenize(prompt.encode("utf-8"))
         return len(tokens)
 
     def generate(self, prompt, schema=None):
@@ -127,14 +132,26 @@ class QwenModel(LLMModel):
 
         return self.model.invoke(prompt)
 
-def main():
-    # test the Gemini model
-    model = GeminiModel()
-    prompt = "What is the capital of France?"
-    print(f"token count: {model.token_count(prompt)}")
-    print(model.model.invoke(prompt))
+class OllamaModel(LLMModel):
+    def __init__(self):
+        super().__init__()
+        self.model = OllamaLLM(model="gemma3:4b")
 
-    prompt2 = "What is the capital of Germany?"
+    def generate(self, prompt, schema=None):
+        if schema:
+            model = self.model.with_structured_output(schema)
+            structured_output = model.invoke(prompt)
+            return structured_output
+
+        response = self.model.invoke(prompt)
+
+        return response
+
+def main():
+    from pydantic import BaseModel, Field
+    # test the Gemini model
+    model = OllamaModel()
+    prompt2 = "john is a 10 years old boy"
     print(model.generate(prompt2))
 
 if __name__ == "__main__":
