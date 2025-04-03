@@ -1,158 +1,225 @@
+# llm_model.py
+
 import tiktoken
 import os
-from vertexai.preview import tokenization
+import time
+from vertexai.preview import tokenization # Keep for token counting if preferred
+# Or use the direct model's count_tokens if switching fully away from vertexai preview
+# from google.generativeai import GenerativeModel # Needed if using direct API's count_tokens
+
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-
-from langchain_community.llms import LlamaCpp
-from langchain_core.callbacks import CallbackManager, StreamingStdOutCallbackHandler
-from langchain_ollama import OllamaEmbeddings
-from llama_cpp import Llama
-from contextlib import redirect_stdout, redirect_stderr
-
-from langchain_ollama.llms import OllamaLLM
-
-import time
+# Remove LlamaCpp/Ollama specific imports if not needed in this file
+# from langchain_community.llms import LlamaCpp
+# from langchain_core.callbacks import CallbackManager, StreamingStdOutCallbackHandler
+# from langchain_ollama import OllamaEmbeddings
+# from llama_cpp import Llama
+# from contextlib import redirect_stdout, redirect_stderr
+# from langchain_ollama.llms import OllamaLLM
 
 from .logger import Logger
-from ..config import config as cfg
+from ..config import config as cfg # Assuming config has GEMINI_LLM_MODEL
+from pydantic import BaseModel # Needed for type hinting schema
+from typing import Type, Optional
+
+# Mapping from known model names to their RPM limits (based on your image)
+# Add other models as needed
+MODEL_RPM_LIMITS = {
+    "gemini-2.5-pro-experimental": 5,
+    "gemini-2.0-flash": 15,
+    "gemini-2.0-flash-experimental": 10, # Assuming same as non-experimental if not specified
+    "gemini-2.0-flash-lite": 30,
+    "gemini-2.0-flash-thinking-experimental-01-21": 10,
+    "gemini-1.5-flash": 15,
+    "gemini-1.5-flash-8b": 15,
+    "gemini-1.5-pro": 2,
+    "gemma-3": 30, # Assuming this is gemma 3 based on image
+    # Add default or handle missing models
+    "default": 15 # A reasonable default if model not found
+}
+
 
 class LLMModel:
     """
-    provide common interface for Gemini model, but user can still access the model-specific methods via `self.model`
+    Provide common interface for different LLM models.
     """
     def __init__(self):
         self._logger = Logger()
         self.model = None
         self.embedding = None
         self.context_size = 0
+        self._last_api_call_time: Optional[float] = None
+        self.rpm_limit: int = 15 # Default RPM
+        self.min_request_interval: float = 60.0 / self.rpm_limit
 
-    def generate(self, prompt, schema=None):
-        if schema:
-            model = self.model.with_structured_output(schema)
-            structured_output = model.invoke(prompt)
-            return structured_output
+    def _wait_for_rate_limit(self):
+        """Checks and waits if the time since the last call is less than the required interval."""
+        if self._last_api_call_time is None:
+            return # No need to wait for the first call
 
-        response = self.model.invoke(prompt)
-        content = response.content
+        now = time.monotonic()
+        time_since_last = now - self._last_api_call_time
+        wait_needed = self.min_request_interval - time_since_last
 
-        return content
+        if wait_needed > 0:
+            self._logger.debug(f"Rate limit check: Waiting for {wait_needed:.2f} seconds.")
+            time.sleep(wait_needed)
+        # No logging if no wait needed to avoid clutter
 
-    def token_count(self, prompt: str) -> int:
-        tokenizer = tiktoken.get_encoding("cl100k_base")
+    def _update_last_call_time(self):
+        """Updates the timestamp of the last API call."""
+        self._last_api_call_time = time.monotonic()
 
-        tokens = tokenizer.encode(prompt)
-        token_count = len(tokens)
-        return token_count
+    def generate(self, prompt: str, schema: Optional[Type[BaseModel]] = None):
+        raise NotImplementedError
+
+    def token_count(self, prompt: str | None) -> int:
+        raise NotImplementedError
+
 
 class GeminiModel(LLMModel):
-    # Gemini-specific implementation
     """
-    by default, asusme using gemini flash 2.0
+    Gemini model implementation using LangChain, with improved rate limiting.
     """
     def __init__(self):
         super().__init__()
 
-        self.context_size = 100000
+        # --- Model Setup ---
+        self.context_size = 1000000 # Example, adjust based on actual model limits if needed
+        self.model_name = cfg.GEMINI_LLM_MODEL # e.g., "gemini-2.0-flash-lite"
 
-        model_name = cfg.GEMINI_LLM_MODEL
-        api_key = os.environ['GENAI_API_KEY']
+        # --- Rate Limiting Setup ---
+        self.rpm_limit = MODEL_RPM_LIMITS.get(self.model_name, MODEL_RPM_LIMITS["default"])
+        if self.rpm_limit <= 0:
+             self._logger.warning(f"RPM limit for {self.model_name} is zero or invalid. Disabling rate limiting wait.")
+             self.min_request_interval = 0
+        else:
+            self.min_request_interval = 60.0 / self.rpm_limit
+        self._logger.info(f"Initialized GeminiModel: {self.model_name}. Rate limit: {self.rpm_limit} RPM (Min interval: {self.min_request_interval:.2f}s)")
+
+
+        # --- API Key and LangChain Initialization ---
+        api_key = os.environ.get('GENAI_API_KEY')
         if api_key is None:
-            self._logger.error("Please define GENAI_API_KEY in the environment variable")
-            raise ValueError("Please define GENAI_API_KEY in the environment variable")
+            self._logger.error("GENAI_API_KEY environment variable not set.")
+            raise ValueError("GENAI_API_KEY environment variable not set.")
+        # Langchain uses GOOGLE_API_KEY, so set it.
         os.environ["GOOGLE_API_KEY"] = api_key
 
         try:
-            self.model = ChatGoogleGenerativeAI(model=model_name, temperature=0, verbose=False)
+            self.model = ChatGoogleGenerativeAI(
+                model=self.model_name,
+                temperature=0,
+                verbose=False,
+                # convert_system_message_to_human=True # Might be needed depending on LangChain/model version
+            )
+            # Set the embedding model
+            self.embedding = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004", task_type="retrieval_document") # Specify task_type
 
-            # set the embedding model
-            self.embedding = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
-
-            self._logger.info(f"Gemini model {model_name} is using, Gemini model initialized")
+            self._logger.info(f"Gemini model {self.model_name} initialized successfully via LangChain.")
         except Exception as e:
-            self._logger.error(f"Error in initializing Gemini model: {e}")
+            self._logger.error(f"Error initializing LangChain Gemini model: {e}")
+            raise # Re-raise the exception
 
     def token_count(self, prompt: str | None) -> int:
         if prompt is None:
             return 0
+        # Using vertexai preview tokenizer as in original code
+        # Ensure 'google-cloud-aiplatform' is installed and authenticated if using this
+        try:
+            # Make sure the model name passed here is compatible with the tokenizer
+            # Using a known compatible model like 'gemini-1.5-flash' might be safer
+            # if the specific one like 'gemini-2.0-flash-lite' isn't directly supported by the preview tokenizer.
+            tokenizer_model_name = "gemini-1.5-flash" # Or try self.model_name
+            tokenizer = tokenization.get_tokenizer_for_model(tokenizer_model_name)
+            result = tokenizer.count_tokens(prompt)
+            return result.total_tokens
+        except Exception as e:
+            self._logger.warning(f"Could not count tokens using vertexai tokenizer for model {self.model_name} (tried with {tokenizer_model_name}): {e}. Falling back to basic estimate.")
+            # Fallback: very rough estimate (split by spaces)
+            return len(prompt.split())
 
-        tokenizer = tokenization.get_tokenizer_for_model("gemini-1.5-flash")
+    def generate(self, prompt: str, schema: Optional[Type[BaseModel]] = None):
+        """Generates content using the Gemini model, optionally with structured output."""
+        self._wait_for_rate_limit() # Wait before making the call
 
-        result = tokenizer.count_tokens(prompt)
-        return result.total_tokens
+        try:
+            if schema:
+                self._logger.debug(f"Attempting structured output with schema: {schema.__name__}")
+                structured_model = self.model.with_structured_output(schema, include_raw=False)
+                # It seems the .invoke call itself was printing the schema info in your test.
+                # Let's see if it still does and if it returns data now.
+                response = structured_model.invoke(prompt)
+                self._logger.debug(f"Structured output response type: {type(response)}")
+                if response is None:
+                     self._logger.warning(f"Structured output for schema {schema.__name__} returned None.")
+                # If response is not None, it should be an instance of the schema class
+                output = response
+            else:
+                self._logger.debug("Generating standard text output.")
+                response = self.model.invoke(prompt)
+                output = response.content # Extract text content
 
-    def generate(self, prompt, schema=None):
-        if schema:
-            model = self.model.with_structured_output(schema, include_raw=False)
-            structured_output = model.invoke(prompt)
-            return structured_output
+            self._update_last_call_time() # Update time only after successful call
+            return output
 
-        response = self.model.invoke(prompt)
-        content = response.content
-        time.sleep(5)
+        except Exception as e:
+            self._logger.error(f"Error during Gemini API call: {e}")
+            # Don't update last call time if it failed
+            # Depending on the error, you might want to implement retries
+            raise # Re-raise the exception to signal failure
 
-        return content
+# Example Usage (similar to llm.py, adjust imports)
+if __name__ == '__main__':
+    from pydantic import Field # Add this import
+    from typing import List # Add this import
+
+    # Configure logger (replace with your actual logger setup)
+    cfg.LOGGER_NAME = "test_llm"
+    cfg.LOG_FILE = "test_llm.log"
+    cfg.GEMINI_LLM_MODEL = "gemini-2.0-flash-lite" # Set the model to test
+
+    # Ensure GENAI_API_KEY is set in your environment
+    if 'GENAI_API_KEY' not in os.environ:
+        print("Error: GENAI_API_KEY environment variable not set.")
+        exit()
+
+    # Define a Pydantic schema FOR TESTING
+    # NOTE: Use List[int] for a list of integers!
+    class TestSchema(BaseModel):
+        list_of_int: List[int] = Field(description="list of 10 integers generated")
+
+    test_prompt = "Generate a list containing exactly 10 different integer numbers."
+
+    try:
+        print("Initializing GeminiModel...")
+        gemini_model = GeminiModel()
+
+        print("\nTesting standard generation:")
+        standard_response = gemini_model.generate(test_prompt)
+        print("Standard Response:")
+        print(standard_response)
+
+        print("\nTesting structured generation:")
+        # Use the corrected schema type
+        structured_response = gemini_model.generate(test_prompt, schema=TestSchema)
+        print("Structured Response:")
+        print(structured_response)
+        print(f"Type of structured response: {type(structured_response)}")
+
+        if isinstance(structured_response, TestSchema):
+             print("Successfully parsed into TestSchema object.")
+             print(f"Generated list: {structured_response.list_of_int}")
+        elif structured_response is None:
+             print("Structured response was None.")
+        else:
+             print("Structured response was not None, but not the expected Pydantic object.")
 
 
-class QwenModel(LLMModel):
-    def __init__(self):
-        super().__init__()
-        path = "./models/qwen/qwen2.5-7b-instruct-1m-q4_k_m.gguf"
-        self.n_gpu_layers = -1
-        self.n_batch = 512
-
-        self.context_size = 128000
+        print("\nTesting token count:")
+        count = gemini_model.token_count(test_prompt)
+        print(f"Token count for prompt: {count}")
 
 
-        with open(os.devnull, 'w') as f, redirect_stdout(f), redirect_stderr(f):
-            self.model = LlamaCpp(
-                    model_path=path,
-                    n_gpu_layers=self.n_gpu_layers,
-                    n_batch=self.n_batch,
-                    callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]),
-                    verbose=False
-                    )
-
-            # set the embedding model
-            self._llm_raw = Llama(model_path=path, n_ctx=self.context_size, verbose=False)
-            self.embedding = OllamaEmbeddings(model="qwen2.5")
-
-    def token_count(self, prompt: str | None) -> int:
-        if prompt is None:
-            return 0
-
-        tokens = self._llm_raw.tokenize(prompt.encode("utf-8"))
-        return len(tokens)
-
-    def generate(self, prompt, schema=None):
-        if schema:
-            model = self.model.with_structured_output(schema)
-            structured_output = model.invoke(prompt)
-            return structured_output
-
-        return self.model.invoke(prompt)
-
-class OllamaModel(LLMModel):
-    def __init__(self):
-        super().__init__()
-        self.model = OllamaLLM(model="gemma3:4b")
-
-    def generate(self, prompt, schema=None):
-        if schema:
-            model = self.model.with_structured_output(schema)
-            structured_output = model.invoke(prompt)
-            return structured_output
-
-        response = self.model.invoke(prompt)
-
-        return response
-
-def main():
-    from pydantic import BaseModel, Field
-    # test the Gemini model
-    model = OllamaModel()
-    prompt2 = "john is a 10 years old boy"
-    print(model.generate(prompt2))
-
-if __name__ == "__main__":
-    main()
+    except Exception as e:
+        print(f"\nAn error occurred: {e}")
