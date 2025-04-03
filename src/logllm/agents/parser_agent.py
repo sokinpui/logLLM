@@ -87,7 +87,7 @@ class SimpleDrainLogParserAgent:
         try:
             # Make sure the prompt exists and the key is correct
             prompt_key = "_generate_log_format" # Or whatever key you use in prompts.json
-            prompt = self.prompts_manager.get_prompt(prompt_key=prompt_key, sample_logs=str(sample_logs))
+            prompt = self.prompts_manager.get_prompt(sample_logs=str(sample_logs))
             if not prompt:
                  self._logger.error(f"Prompt '{prompt_key}' not found or failed to format.")
                  return None
