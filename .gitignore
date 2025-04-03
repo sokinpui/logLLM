@@ -30,6 +30,7 @@ tmp.py
 logs/
 log
 results/
+movelook.log*
 
 # Dependency and build artifacts
 pip-wheel-metadata/

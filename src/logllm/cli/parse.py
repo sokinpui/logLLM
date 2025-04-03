@@ -2,31 +2,45 @@
 import argparse
 import os
 import sys
-from typing import Dict, List # Added typing
+import multiprocessing # Import to get cpu_count
+from typing import Dict, List, Optional # Added typing
 
 # Use try-except for robustness if structure changes or run context varies
 try:
+    # Adjust relative paths if necessary based on your project structure
     from ..agents.parser_agent import GroupLogParserAgent, SimpleDrainLogParserAgent, SimpleDrainLogParserState
     from ..utils.llm_model import GeminiModel # Or your base LLMModel class if you have a factory
-    from ..utils.database import ElasticsearchDatabase # Needed for Group parser
+    from ..utils.database import ElasticsearchDatabase # Needed for Group parser (though agent uses it)
     from ..utils.logger import Logger
     from ..config import config as cfg # If needed for model name etc.
-except ImportError:
-    print("Error importing necessary modules for CLI 'parse' command.")
+except ImportError as e:
+    print(f"Error importing necessary modules for CLI 'parse' command: {e}")
     # Provide more context if possible, e.g., which module failed
     print("Ensure you are running from the correct directory and PYTHONPATH is set.")
+    # Add fallback import logic if needed (see previous examples)
     sys.exit(1)
 
 logger = Logger()
 
 def handle_parse(args):
     """Handles the logic for the 'parse' command."""
+    show_drain_progress = args.show_progress # Get the flag value
+    num_threads = args.threads # Get thread count
 
-    # --- Initialize required components ---
+    # Validate thread count
+    if num_threads < 1:
+        logger.warning(f"Invalid thread count ({num_threads}) specified. Defaulting to 1.")
+        print(f"Warning: Invalid thread count ({num_threads}), using 1 thread.")
+        num_threads = 1
+
+    # --- Initialize required components (Main thread instance) ---
     try:
-        logger.info("Initializing LLM Model for parsing...")
-        # Assuming GeminiModel is the one used by your agents
-        # You might want to fetch the model name from config: cfg.GEMINI_LLM_MODEL
+        logger.info("Initializing LLM Model for parsing (main thread instance)...")
+        # Model initialized once here. It's used directly for:
+        # 1. Single file parsing (-f)
+        # 2. Group parsing (-d) when threads=1
+        # 3. Determining initial group formats before parallel workers start
+        # Parallel workers (-d with threads > 1) will initialize their own instances.
         model = GeminiModel()
     except Exception as e:
         logger.error(f"Failed to initialize LLM Model: {e}", exc_info=True)
@@ -40,25 +54,26 @@ def handle_parse(args):
             logger.warning("--log-format is ignored when using -d/--directory parsing.")
             print("Warning: --log-format option is only applicable with -f/--file.")
 
-        logger.info(f"Executing parse command for directory '{args.directory}' (using collected group info).")
-        print(f"Starting parsing for all logs associated with collected groups...")
+        logger.info(f"Executing group parse command for directory '{args.directory}'. Threads: {num_threads}")
+        print(f"Starting parsing for all logs associated with collected groups using {num_threads} worker(s)...")
+        if show_drain_progress:
+            print("(--show-progress enabled: Drain output will be visible)")
 
         try:
-            # GroupLogParserAgent needs the model
+            # GroupLogParserAgent needs the model instance mainly for threads=1 case
+            # or for determining group formats before starting workers.
             agent = GroupLogParserAgent(model=model)
-            # The agent fetches groups from Elasticsearch internally
-            parsing_results = agent.run()
+            # Pass thread count and show_progress flag to the agent's run method
+            parsing_results = agent.run(num_threads=num_threads, show_progress=show_drain_progress)
 
             # --- Display Summary ---
             print("\n--- Parsing Summary ---")
             successful_groups = 0
             total_csvs = 0
             failed_groups = []
-
             if not parsing_results:
                  print("No parsing results returned. Check logs for errors fetching groups or during parsing.")
                  return
-
             for group, csv_paths in parsing_results.items():
                 if csv_paths:
                     print(f"Group '{group}': {len(csv_paths)} CSVs generated")
@@ -67,7 +82,6 @@ def handle_parse(args):
                 else:
                     print(f"Group '{group}': No CSVs generated (check logs for errors)")
                     failed_groups.append(group)
-
             print("\n--- Overall ---")
             print(f"Total Groups Processed: {len(parsing_results)}")
             print(f"Groups with at least one successful parse: {successful_groups}")
@@ -79,9 +93,17 @@ def handle_parse(args):
         except Exception as e:
             logger.error(f"An error occurred during group parsing: {e}", exc_info=True)
             print(f"\nAn error occurred during group parsing: {e}")
+            # Optionally print traceback for debugging
+            # import traceback
+            # traceback.print_exc()
 
     elif args.file:
         # --- Single File Parsing Logic ---
+        if num_threads > 1:
+            # Inform the user that threading is ignored for single file
+            logger.warning(f"-t/--threads set to {num_threads}, but single file parsing (-f) is always sequential. Ignoring thread count.")
+            print("Warning: Thread count ignored for single file parsing.")
+
         file_path = args.file
         logger.info(f"Executing parse command for single file: {file_path}")
         if not os.path.isfile(file_path):
@@ -89,19 +111,22 @@ def handle_parse(args):
             print(f"Error: File not found: {file_path}")
             return
 
-        log_format = args.log_format # This will be None if not provided
+        log_format = args.log_format
+        prep_message = f"--- Preparing to parse single file '{os.path.basename(file_path)}'"
         if log_format:
             logger.info(f"Using provided log format: {log_format}")
-            print(f"Attempting to parse '{os.path.basename(file_path)}' with provided format...")
+            prep_message += " with provided format"
         else:
-            logger.info(f"No log format provided, LLM will generate one for: {os.path.basename(file_path)}")
-            print(f"Attempting to parse '{os.path.basename(file_path)}' (LLM will generate format)...")
+            logger.info(f"No log format provided, LLM will generate one.")
+            prep_message += " (LLM will generate format)"
+        prep_message += " ---"
+        print(prep_message)
+        if show_drain_progress:
+            print("(--show-progress enabled: Drain output will be visible)")
 
         try:
-            # SimpleDrainLogParserAgent needs the model
+            # Use the model instance initialized earlier for single file parsing
             agent = SimpleDrainLogParserAgent(model=model)
-
-            # Prepare the initial state
             state: SimpleDrainLogParserState = {
                 "log_file_path": file_path,
                 "log_format": log_format, # Pass user format or None
@@ -109,26 +134,29 @@ def handle_parse(args):
                 "sample_logs": ""         # Will be populated by the agent if needed
             }
 
-            result_state = agent.run(state)
+            # Pass the show_progress flag to the agent's run method
+            result_state = agent.run(state, show_progress=show_drain_progress)
 
             # --- Display Result ---
+            print("\n--- Parsing Result ---") # Add marker after potential Drain output
             if result_state.get("output_csv_path"):
-                logger.info(f"Successfully parsed file. Output: {result_state['output_csv_path']}")
-                print(f"\nSuccessfully parsed '{os.path.basename(file_path)}'.")
+                print(f"Status: SUCCESS")
                 print(f"Output CSV: {result_state['output_csv_path']}")
                 if not log_format and result_state.get("log_format"):
                      print(f"Generated log format used: {result_state['log_format']}")
             else:
-                logger.error(f"Failed to parse file: {file_path}")
-                print(f"\nFailed to parse '{os.path.basename(file_path)}'. Check logs for details.")
+                print(f"Status: FAILED")
                 if not log_format and result_state.get("log_format"):
-                     # Even if parsing failed, show the format if it was generated
                      print(f"Generated log format (parsing failed): {result_state['log_format']}")
+                print("Check logs or scroll up for Drain error messages.")
 
 
         except Exception as e:
             logger.error(f"An error occurred during single file parsing: {e}", exc_info=True)
             print(f"\nAn error occurred during single file parsing: {e}")
+            # Optionally print traceback for debugging
+            # import traceback
+            # traceback.print_exc()
 
     else:
         # This case should not be reached if the mutually exclusive group is required
@@ -141,7 +169,7 @@ def register_parse_parser(subparsers):
     parse_parser = subparsers.add_parser(
         'parse',
         help='Parse log files using Drain (requires collected logs for -d)',
-        description="Parses log files. Use -d to parse all logs based on previously collected group information stored in Elasticsearch. Use -f to parse a single specified log file."
+        description="Parses log files. Use -d for group parsing (can be parallelized with -t), -f for single file."
     )
 
     # --- Mutually Exclusive Group for Directory or File ---
@@ -149,7 +177,7 @@ def register_parse_parser(subparsers):
     input_group.add_argument(
         '-d', '--directory',
         type=str,
-        help='Path to the ORIGINAL log directory (triggers parsing for all associated files found by the previous \'collect\' run based on group info in DB)'
+        help='Path to the ORIGINAL log directory (triggers group parsing based on info in DB)'
     )
     input_group.add_argument(
         '-f', '--file',
@@ -163,6 +191,29 @@ def register_parse_parser(subparsers):
         type=str,
         help='(Optional) Specify Drain log format string. Only applicable when using -f/--file.'
     )
+
+    # --- Show Progress Flag ---
+    parse_parser.add_argument(
+        '--show-progress',
+        action='store_true', # Sets args.show_progress to True if flag is present
+        help='Show Drain internal parsing progress/output instead of suppressing it.'
+    )
+
+    # --- Threads Argument ---
+    default_threads = 1
+    try:
+        # Use cpu_count if available, otherwise default
+        max_threads = multiprocessing.cpu_count()
+        max_help = f"Max suggested: {max_threads}."
+    except NotImplementedError:
+        max_threads = 1 # Fallback if cpu_count is not implemented
+        max_help = "Cannot determine max CPUs."
+
+    parse_parser.add_argument(
+        '-t', '--threads', type=int, default=default_threads,
+        help=f'Number of parallel processes for group parsing (-d). Default: {default_threads}. {max_help} Ignored for -f.'
+    )
+
 
     # Set the function to be called when 'parse' is chosen
     parse_parser.set_defaults(func=handle_parse)
