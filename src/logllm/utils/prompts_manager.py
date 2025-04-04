@@ -8,6 +8,9 @@ import subprocess
 from typing import Dict, Any, List
 from datetime import datetime
 
+RED = '\033[91m'  # Bright Red
+RESET = '\033[0m' # Reset color to default
+
 class PromptsManager:
     def __init__(self, json_file="prompts/prompts.json"):
         self.json_file = json_file
@@ -480,9 +483,9 @@ class PromptsManager:
             for entry in sorted_history:
                 if key and entry["prompt"]:
                     prompt_display = entry["prompt"] if verbose == -1 else entry["prompt"][:verbose]
-                    print(f"| {entry['commit'][:8]} | {entry['message']} | Prompt: {prompt_display}")
+                    print(f"| {RED}{entry['commit'][:8]}{RESET} | {RED}{entry['message']}{RESET} | Prompt:\n{prompt_display}")
                 else:
-                    print(f"| {entry['commit'][:8]} | {entry['message']}")
+                    print(f"| {RED}{entry['commit'][:8]}{RESET} | {RED}{entry['message']}{RESET}")
         else:
             # Pretty boxed output with fixed-width columns and collapsed prompts
             commit_width = 8  # Fixed width for commit hash
@@ -500,6 +503,9 @@ class PromptsManager:
                     msg_display = entry["message"][:msg_width-3] + "..."
                 else:
                     msg_display = entry["message"].ljust(msg_width)
+
+                colored_commit = f"{RED}{commit_display}{RESET}"
+                colored_msg = f"{RED}{msg_display}{RESET}"
                 if key and entry["prompt"]:
                     # Take the first line, truncate if needed, and remove any newlines
                     prompt_lines = entry["prompt"].split("\n")
@@ -507,9 +513,9 @@ class PromptsManager:
                     prompt_display = f"Prompt: {first_line}"
                     if (verbose != -1 and len(prompt_lines[0]) > verbose) or len(prompt_lines) > 1:
                         prompt_display += "..."
-                    print(f"| {commit_display} | {msg_display} | {prompt_display}")
+                    print(f"| {colored_commit} | {colored_msg} |\n{prompt_display}")
                 else:
-                    print(f"| {commit_display} | {msg_display}")
+                    print(f"| {colored_commit} | {colored_msg}")
 
             print("-" * total_width)
 
