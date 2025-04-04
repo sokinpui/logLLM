@@ -64,7 +64,7 @@ def _parse_file_worker(file_path: str, group_format: Optional[str], show_progres
 
 # --- SimpleDrainLogParserAgent Class ---
 class SimpleDrainLogParserAgent:
-    SAMPLE_SIZE = 50
+    SAMPLE_SIZE = 10
 
     def __init__(self, model: LLMModel):
         self._model = model
@@ -367,12 +367,6 @@ class GroupLogParserAgent:
         if groups is None: self._logger.error("Cannot proceed without groups."); return {}
         if num_threads < 1: num_threads = 1
         return self.parse_all_logs(groups, num_threads=num_threads, show_progress=show_progress)
-
-
-# --- __main__ block for testing (optional) ---
-if __name__ == "__main__":
-    # (Keep or adapt testing logic as needed)
-    pass
 
 
 # --- __main__ block for testing (optional) ---
