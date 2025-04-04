@@ -14,7 +14,7 @@ import multiprocessing
 try:
     from ..utils.llm_model import LLMModel, GeminiModel
     from ..utils.logger import Logger
-    from ..utils.prompts_manager.prompts_manager import PromptsManager
+    from ..utils.prompts_manager import PromptsManager
     from ..utils.database import ElasticsearchDatabase
     from ..config import config as cfg
 except ImportError as e:

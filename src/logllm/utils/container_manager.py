@@ -7,7 +7,7 @@ import platform
 import subprocess
 import os
 import docker
-from docker.errors import NotFound, ImageNotFound, APIError, DockerException #
+from docker.errors import NotFound
 
 class ContainerManager(ABC):
     @abstractmethod
@@ -72,7 +72,7 @@ class DockerManager(ContainerManager):
             container = self._client.containers.get(container_name)
             container.remove(force=True)
             self._logger.info(f"Container {container_name} removed successfully")
-        except docker.errors.NotFound:
+        except NotFound:
             self._logger.info(f"Container {container_name} not found")
         except Exception as e:
             self._logger.error(f"Error removing container {container_name}: {e}")
@@ -81,7 +81,7 @@ class DockerManager(ContainerManager):
         try:
             self._client.networks.get(network_name)
             self._logger.info(f"Volume {network_name} already exists")
-        except docker.errors.NotFound:
+        except NotFound:
             self._logger.info(f"Volume {network_name} not found. Creating volume...")
             self._client.networks.create(network_name)
             self._logger.info(f"Volume {network_name} created successfully")
@@ -92,7 +92,7 @@ class DockerManager(ContainerManager):
         try:
             self._client.volumes.get(volume_name)
             self._logger.info(f"Volume {volume_name} already exists")
-        except docker.errors.NotFound:
+        except NotFound:
             self._logger.info(f"Volume {volume_name} not found. Creating volume...")
             self._client.volumes.create(volume_name)
             self._logger.info(f"Volume {volume_name} created successfully")
@@ -103,7 +103,7 @@ class DockerManager(ContainerManager):
         try:
             self._client.images.get(image)
             self._logger.info(f"Image {image} already exists")
-        except docker.errors.NotFound:
+        except NotFound:
             self._logger.info(f"Image {image} not found. Pulling image...")
             self._client.images.pull(image)
             self._logger.info(f"Image {image} pulled successfully")
