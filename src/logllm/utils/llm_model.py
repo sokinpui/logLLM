@@ -297,7 +297,6 @@ def main():
     cfg.LOGGER_NAME = "test_llm_direct"
     cfg.LOG_FILE = "test_llm_direct.log"
     # Ensure model name in config is valid for the API, e.g., "gemini-1.5-flash-latest"
-    cfg.GEMINI_LLM_MODEL = "gemma-3-27b-it"
 
     if 'GENAI_API_KEY' not in os.environ:
         print("Error: GENAI_API_KEY environment variable not set.")
