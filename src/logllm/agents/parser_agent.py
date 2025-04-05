@@ -9,6 +9,8 @@ from contextlib import redirect_stdout, nullcontext
 import sys
 import concurrent.futures
 import multiprocessing
+from pygrok import Grok
+import csv # Import csv module
 
 # Relative imports (ensure paths are correct for your structure)
 try:
@@ -29,38 +31,296 @@ class SimpleDrainLogParserState(TypedDict):
     output_csv_path: str
     sample_logs: str
 
+class SimpleGrokLogParserState(TypedDict):
+    log_file_path: str
+    grok_pattern: Optional[str]  # Can be user-provided or LLM-generated
+    output_csv_path: str
+    sample_logs: str
+    parsed_lines: int # Keep track of how many lines were successfully parsed
+    skipped_lines: int # Keep track of lines that didn't match
+
 # --- Worker Function for Parallel Processing ---
 # (This remains the same as the previous version - it correctly passes show_progress down)
-def _parse_file_worker(file_path: str, group_format: Optional[str], show_progress: bool) -> Tuple[str, Optional[str]]:
+def _parse_file_worker(file_path: str, group_grok_pattern: Optional[str], show_progress: bool) -> Tuple[str, Optional[str]]:
     """
-    Worker function to parse a single file. Initializes its own dependencies.
+    Worker function to parse a single file using SimpleGrokLogParserAgent.
+    Initializes its own dependencies.
     Returns a tuple: (original_file_path, output_csv_path or None on failure)
     """
-    worker_logger = Logger()
+    worker_logger = Logger() # Each worker gets its own logger instance if needed, or use shared singleton
+    output_path: Optional[str] = None
     try:
+        # Worker needs its own model instance if running in separate processes
         worker_model = GeminiModel() # Ensure API keys accessible via env
-        worker_agent = SimpleDrainLogParserAgent(model=worker_model)
-        initial_state: SimpleDrainLogParserState = {
-            "log_file_path": file_path, "log_format": group_format,
-            "output_csv_path": "", "sample_logs": ""
+        # *** Use the Grok Agent ***
+        worker_agent = SimpleGrokLogParserAgent(model=worker_model)
+        # *** Use the Grok State ***
+        initial_state: SimpleGrokLogParserState = {
+            "log_file_path": file_path,
+            "grok_pattern": group_grok_pattern, # Pass the pre-determined group pattern (or None)
+            "output_csv_path": "",
+            "sample_logs": "", # Agent will populate if needed for generation
+            "parsed_lines": 0,
+            "skipped_lines": 0
         }
-        # Pass the flag correctly
+        # 'show_progress' flag is less relevant for Grok's output but pass for consistency
         result_state = worker_agent.run(initial_state, show_progress=show_progress)
 
-        # Optional Fallback Logic
-        if not result_state.get("output_csv_path") and group_format:
-             worker_logger.warning(f"Group format failed for {os.path.basename(file_path)}. Trying file-specific.")
-             fallback_state = initial_state.copy(); fallback_state["log_format"] = None
+        output_path = result_state.get("output_csv_path") or None
+
+        # --- Optional Fallback Logic (If group pattern failed, try generating file-specific) ---
+        # Check if parsing failed *and* we were using a pre-provided group pattern
+        if not output_path and group_grok_pattern:
+             worker_logger.warning(f"Group Grok pattern failed for {os.path.basename(file_path)}. Trying file-specific pattern generation.")
+             # Create new state *without* the pattern to trigger LLM generation
+             fallback_state: SimpleGrokLogParserState = {
+                 "log_file_path": file_path, "grok_pattern": None, # <-- Force generation
+                 "output_csv_path": "", "sample_logs": "",
+                 "parsed_lines": 0, "skipped_lines": 0
+             }
              fallback_result_state = worker_agent.run(fallback_state, show_progress=show_progress)
              output_path = fallback_result_state.get("output_csv_path") or None
-             # Log success/failure of fallback
-             return file_path, output_path
-        else:
-             return file_path, result_state.get("output_csv_path") or None
+             if output_path:
+                 worker_logger.info(f"Fallback Grok pattern generation SUCCESSFUL for {os.path.basename(file_path)}")
+             else:
+                 worker_logger.warning(f"Fallback Grok pattern generation FAILED for {os.path.basename(file_path)}")
+
+        return file_path, output_path
+
     except Exception as e:
-        worker_logger.error(f"Error in worker for {os.path.basename(file_path)}: {e}", exc_info=True)
-        print(f"[File ???] ERROR (Worker): {os.path.basename(file_path)} - {e}")
-        return file_path, None
+        # Log error specific to this file/worker
+        worker_logger.error(f"Error in Grok worker for {os.path.basename(file_path)}: {e}", exc_info=True)
+        # Also print to console for immediate feedback during CLI runs
+        print(f"[File ???] ERROR (Grok Worker): {os.path.basename(file_path)} - {e}")
+        return file_path, None # Ensure failure returns None for the path
+
+# src/logllm/agents/parser_agent.py (add this class)
+
+class GrokPatternSchema(BaseModel):
+    """Pydantic schema for the LLM response containing the Grok pattern."""
+    grok_pattern: str = Field(description="Output only the Grok pattern string.")
+
+class SimpleGrokLogParserAgent:
+    SAMPLE_SIZE = 10 # Number of lines to sample for LLM
+
+    def __init__(self, model: LLMModel):
+        self._model = model
+        self._logger = Logger()
+        # Ensure prompt path is correct
+        prompt_path = os.path.join("prompts/prompts.json")
+        if not os.path.exists(prompt_path):
+             # Attempt relative path if absolute fails (useful if run from project root)
+             prompt_path = os.path.join(os.path.dirname(__file__), "..", "..", "prompts/prompts.json")
+             if not os.path.exists(prompt_path):
+                 raise FileNotFoundError(f"Prompts file not found at primary or relative path: {prompt_path}")
+        self.prompts_manager = PromptsManager(json_file=prompt_path)
+        # Optional: Preload common patterns (can improve performance slightly)
+        # Grok.DEFAULT_PATTERNS_DIRS = [...] # If you have custom pattern files
+
+    def run(self, initial_state: SimpleGrokLogParserState, show_progress: bool = False) -> SimpleGrokLogParserState:
+        """Parse a single log file using Grok, conditionally generating the pattern via LLM."""
+        if "log_file_path" not in initial_state or not os.path.isfile(initial_state["log_file_path"]):
+             self._logger.error("Valid 'log_file_path' must be provided in state.")
+             raise ValueError("Valid 'log_file_path' must be provided.")
+
+        log_file_path = initial_state["log_file_path"]
+        grok_pattern = initial_state.get("grok_pattern") # Get potential user-provided pattern
+        base_name = os.path.basename(log_file_path)
+
+        # --- Initialize result state ---
+        result: SimpleGrokLogParserState = initial_state.copy()
+        result["output_csv_path"] = "" # Default to no output path
+        result["parsed_lines"] = 0
+        result["skipped_lines"] = 0
+
+        # --- Generate Grok Pattern if not provided ---
+        if not grok_pattern:
+            self._logger.info(f"Grok pattern not provided for {base_name}. Generating via LLM...")
+            grok_pattern = self._generate_grok_pattern(log_file_path)
+            result["grok_pattern"] = grok_pattern # Store the generated pattern in the state
+
+            if not grok_pattern:
+                 self._logger.warning(f"Failed to generate Grok pattern for {base_name}. Skipping parsing.")
+                 return result # Cannot parse without a pattern
+
+            self._logger.info(f"LLM generated Grok pattern for {base_name}: {grok_pattern}")
+        else:
+            self._logger.info(f"Using provided Grok pattern for {base_name}: {grok_pattern}")
+
+
+        # --- Run Grok Parser ---
+        try:
+             # Pass the potentially updated state
+             final_state = self._run_grok_parser(result)
+             return final_state
+        except Exception as e:
+             self._logger.error(f"Error during Grok parsing execution for {base_name}: {e}", exc_info=True)
+             # Ensure output path is empty on error
+             result["output_csv_path"] = ""
+             return result
+
+
+    def _generate_grok_pattern(self, log_file_path: str) -> Optional[str]:
+        """Generate Grok pattern using LLM based on log samples."""
+        try:
+            with open(log_file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = f.readlines()
+                # Handle empty files
+                if not lines:
+                    self._logger.warning(f"Log file is empty, cannot sample: {log_file_path}")
+                    return None
+                sample_size = min(self.SAMPLE_SIZE, len(lines))
+                # Ensure sample size is at least 1 if file has lines
+                sample_size = max(1, sample_size)
+                # Use pandas sampling if available and useful, otherwise random.sample
+                try:
+                     sample_logs = pd.Series(lines).sample(sample_size).tolist()
+                except NameError: # pandas might not be imported/used everywhere
+                     import random
+                     sample_logs = random.sample(lines, sample_size)
+
+        except FileNotFoundError:
+            self._logger.error(f"Log file not found for sampling: {log_file_path}")
+            return None
+        except Exception as e:
+            self._logger.error(f"Failed to read or sample log file {os.path.basename(log_file_path)}: {e}", exc_info=True)
+            return None
+
+        if not sample_logs:
+            self._logger.warning(f"No log lines sampled from {os.path.basename(log_file_path)}, cannot generate pattern.")
+            return None
+
+        try:
+            # --- Use PromptsManager to get the correct prompt ---
+            # Make sure the key exists in your prompts.json
+            prompt = self.prompts_manager.get_prompt(sample_logs=str(sample_logs))
+
+            # --- Call LLM ---
+            response = self._model.generate(prompt, schema=GrokPatternSchema)
+
+            # --- Validate Response ---
+            if response and isinstance(response, GrokPatternSchema) and response.grok_pattern:
+                pattern = response.grok_pattern.strip()
+                # Basic sanity check - does it look like a Grok pattern?
+                if "%{" in pattern and "}" in pattern:
+                    self._logger.debug(f"LLM returned Grok pattern: {pattern}")
+                    return pattern
+                else:
+                    self._logger.warning(f"LLM response doesn't look like a valid Grok pattern: {pattern}")
+                    return None
+            else:
+                self._logger.warning(f"LLM did not return a valid GrokPatternSchema object. Response: {response}")
+                return None
+
+        except ValueError as ve: # Catch potential Pydantic validation errors or missing/extra vars
+             self._logger.error(f"Error getting or formatting prompt for Grok generation: {ve}", exc_info=True)
+             return None
+        except Exception as e:
+            self._logger.error(f"LLM call failed during Grok pattern generation: {e}", exc_info=True)
+            return None
+
+
+    def _run_grok_parser(self, state: SimpleGrokLogParserState) -> SimpleGrokLogParserState:
+        """Parses the log file using the provided Grok pattern and writes to CSV."""
+        log_file_path = state["log_file_path"]
+        grok_pattern = state["grok_pattern"]
+        base_name = os.path.basename(log_file_path)
+        dir_name = os.path.dirname(log_file_path)
+
+        # Define output path relative to input file
+        output_csv_path = os.path.join(dir_name, f"parsed_grok_{base_name}.csv")
+        result = state.copy() # Work on a copy
+        result["output_csv_path"] = "" # Reset path initially
+
+        if not grok_pattern:
+            self._logger.error(f"Cannot run Grok parser for {base_name}: No Grok pattern provided in state.")
+            return result
+
+        try:
+            # --- Compile Grok Pattern ---
+            # This can throw ValueError if the pattern syntax is invalid
+            grok = Grok(grok_pattern)
+            self._logger.info(f"Successfully compiled Grok pattern for {base_name}.")
+
+        except ValueError as e:
+            self._logger.error(f"Invalid Grok pattern syntax provided for {base_name}: {grok_pattern} - Error: {e}", exc_info=True)
+            print(f"--- Grok FAILED (Invalid Pattern) for: {base_name} ---")
+            return result # Cannot proceed with invalid pattern
+
+        parsed_data = []
+        skipped_count = 0
+        parsed_count = 0
+        all_fieldnames = set()
+        all_fieldnames.add("OriginalLogLine") # Add this field explicitly
+
+        # --- First Pass: Parse and Collect Data + Headers ---
+        self._logger.info(f"Starting Grok parsing pass 1 (reading lines) for {base_name}...")
+        try:
+            with open(log_file_path, 'r', encoding='utf-8', errors='ignore') as infile:
+                for i, line in enumerate(infile):
+                    line = line.strip()
+                    if not line: # Skip empty lines
+                        continue
+
+                    match = grok.match(line)
+                    if match:
+                        # Add the original line for context/debugging
+                        match['OriginalLogLine'] = line
+                        parsed_data.append(match)
+                        all_fieldnames.update(match.keys()) # Dynamically collect all field names
+                        parsed_count += 1
+                    else:
+                        if skipped_count < 10: # Log only the first few skips to avoid flooding
+                            self._logger.warning(f"Line {i+1} in {base_name} did not match Grok pattern: {line[:100]}...")
+                        elif skipped_count == 10:
+                            self._logger.warning(f"Further Grok mismatches for {base_name} will not be logged individually.")
+                        skipped_count += 1
+        except FileNotFoundError:
+             self._logger.error(f"Input log file not found: {log_file_path}")
+             print(f"--- Grok SKIPPED (File not found): {base_name} ---")
+             return result
+        except Exception as e:
+             self._logger.error(f"Error reading log file {base_name}: {e}", exc_info=True)
+             print(f"--- Grok FAILED (Read Error): {base_name} ---")
+             return result
+
+        result["parsed_lines"] = parsed_count
+        result["skipped_lines"] = skipped_count
+        self._logger.info(f"Grok parsing pass 1 finished for {base_name}. Parsed: {parsed_count}, Skipped: {skipped_count}")
+
+        if not parsed_data:
+             self._logger.warning(f"No lines were successfully parsed by Grok for {base_name}. No CSV will be generated.")
+             print(f"--- Grok WARNING (No lines matched): {base_name} ---")
+             return result # No data to write
+
+        # --- Second Pass: Write to CSV ---
+        # Sort field names for consistent column order, put OriginalLogLine first maybe
+        sorted_fieldnames = sorted(list(all_fieldnames))
+        if "OriginalLogLine" in sorted_fieldnames:
+             sorted_fieldnames.remove("OriginalLogLine")
+             sorted_fieldnames.insert(0, "OriginalLogLine")
+
+        self._logger.info(f"Starting Grok parsing pass 2 (writing CSV) for {base_name} to {output_csv_path}...")
+        try:
+            with open(output_csv_path, 'w', newline='', encoding='utf-8') as outfile:
+                writer = csv.DictWriter(outfile, fieldnames=sorted_fieldnames)
+                writer.writeheader()
+                writer.writerows(parsed_data) # Write all collected data
+
+            result["output_csv_path"] = output_csv_path # Set path only on successful write
+            self._logger.info(f"Successfully wrote Grok parsed data for {base_name} to {os.path.basename(output_csv_path)}")
+            print(f"--- Grok SUCCESS: {base_name} -> {os.path.basename(output_csv_path)} ---")
+
+        except IOError as e:
+             self._logger.error(f"Failed to write CSV file {output_csv_path}: {e}", exc_info=True)
+             print(f"--- Grok FAILED (Write Error): {base_name} ---")
+             result["output_csv_path"] = "" # Clear path on write error
+        except Exception as e:
+             self._logger.error(f"Unexpected error writing CSV for {base_name}: {e}", exc_info=True)
+             print(f"--- Grok FAILED (Unexpected Write Error): {base_name} ---")
+             result["output_csv_path"] = "" # Clear path on write error
+
+        return result
 
 # --- SimpleDrainLogParserAgent Class ---
 class SimpleDrainLogParserAgent:
@@ -219,136 +479,169 @@ class GroupLogParserAgent:
     def __init__(self, model: LLMModel):
         self._logger = Logger()
         self._db = ElasticsearchDatabase()
-        self._model_instance_for_sequential = model # Used for threads=1 or pre-determination
+        # *** Store model instance for sequential runs or pre-determination ***
+        self._model_instance = model
 
     def fetch_groups(self) -> Optional[Dict[str, List[str]]]:
-        """Fetch group information from Elasticsearch."""
-        # (This method remains the same as the previous version)
+        # (This method remains the same - fetches group info from DB)
         try:
             query = {"query": {"match_all": {}}}
             groups_index = cfg.INDEX_GROUP_INFOS
             self._logger.info(f"Fetching groups from index: {groups_index}")
             groups_data = self._db.scroll_search(query=query, index=groups_index)
             if not groups_data:
-                 self._logger.warning(f"No group info found in index '{groups_index}'. Run 'collect'?")
+                 self._logger.warning(f"No group info found in index '{groups_index}'. Run 'collect' first?")
                  return None
-            groups = {doc["_source"]["group"]: doc["_source"]["files"] for doc in groups_data}
-            self._logger.info(f"Fetched {len(groups)} groups.")
+            # Ensure 'files' field exists and is a list
+            groups = {}
+            for doc in groups_data:
+                source = doc.get("_source", {})
+                group_name = source.get("group")
+                files = source.get("files")
+                if group_name and isinstance(files, list):
+                    groups[group_name] = files
+                else:
+                    self._logger.warning(f"Skipping invalid group document in index '{groups_index}': ID {doc.get('_id')}")
+
+            self._logger.info(f"Fetched {len(groups)} valid groups.")
             return groups
         except Exception as e:
-            self._logger.error(f"Failed to fetch groups from index '{groups_index}': {e}", exc_info=True)
+            self._logger.error(f"Failed to fetch or process groups from index '{cfg.INDEX_GROUP_INFOS}': {e}", exc_info=True)
             return None
 
+
     def parse_all_logs(self, groups: Dict[str, List[str]], num_threads: int, show_progress: bool) -> Dict[str, List[str]]:
-        """Parse logs sequentially or in parallel, respecting show_progress flag."""
-        if not groups: return {}
+        """Parse logs sequentially or in parallel using SimpleGrokLogParserAgent."""
+        if not groups:
+            self._logger.warning("No groups provided to parse_all_logs.")
+            return {}
 
-        tasks: List[Tuple[str, str]] = []
-        group_formats: Dict[str, Optional[str]] = {}
+        tasks: List[Tuple[str, str]] = [] # List of (group_name, file_path)
+        group_grok_patterns: Dict[str, Optional[str]] = {} # Store pre-determined patterns
         total_files = 0
-        format_agent: Optional[SimpleDrainLogParserAgent] = None
+        pattern_agent: Optional[SimpleGrokLogParserAgent] = None # Agent instance for pattern generation
 
-        # Attempt to pre-determine formats only if running in parallel
-        if num_threads > 1:
+        # --- Attempt to pre-determine Grok patterns (optional but can save LLM calls) ---
+        # Only makes sense if running in parallel or if you want consistency
+        should_predetermine = num_threads > 0 # Let's always try, even for sequential
+
+        if should_predetermine:
              try:
-                 format_agent = SimpleDrainLogParserAgent(self._model_instance_for_sequential)
-                 print("Attempting to determine initial log formats for groups...")
+                 # *** Use the Grok Agent for pattern generation ***
+                 pattern_agent = SimpleGrokLogParserAgent(self._model_instance)
+                 print("Attempting to determine initial Grok patterns for groups...")
              except Exception as model_init_err:
-                  self._logger.error(f"Failed init for format pre-determination: {model_init_err}")
-                  format_agent = None
+                  self._logger.error(f"Failed to initialize SimpleGrokLogParserAgent for pattern pre-determination: {model_init_err}")
+                  pattern_agent = None
 
+        # --- Prepare tasks and generate patterns ---
         for group, files in groups.items():
-            group_format = None
-            first_file_in_group = next((f for f in files if os.path.isfile(f)), None)
-            if first_file_in_group and format_agent:
-                try:
-                    group_format = format_agent._generate_log_format(first_file_in_group)
-                    # Log result, don't print here to avoid clutter if suppressed later
-                    if group_format: self._logger.info(f"Pre-determined format for '{group}': OK")
-                    else: self._logger.warning(f"Could not pre-determine format for group '{group}'.")
-                except Exception as format_e:
-                     self._logger.error(f"Error pre-determining format for '{group}': {format_e}")
-            group_formats[group] = group_format
+            group_pattern: Optional[str] = None
+            # Find the first valid, existing file in the group to sample from
+            first_file_in_group = next((f for f in files if isinstance(f, str) and os.path.isfile(f)), None)
 
-            # Build task list with only existing files
-            valid_files = [f for f in files if os.path.isfile(f)]
+            if first_file_in_group and pattern_agent:
+                self._logger.debug(f"Attempting pattern pre-determination for group '{group}' using file '{os.path.basename(first_file_in_group)}'")
+                try:
+                    # *** Call the Grok pattern generation method ***
+                    group_pattern = pattern_agent._generate_grok_pattern(first_file_in_group)
+                    if group_pattern:
+                         self._logger.info(f"Pre-determined Grok pattern for group '{group}': OK")
+                         # print(f"  Pattern for '{group}': {group_pattern}") # Optional: print pattern
+                    else:
+                         self._logger.warning(f"Could not pre-determine Grok pattern for group '{group}'. Will attempt per-file generation if needed.")
+                except Exception as format_e:
+                     self._logger.error(f"Error pre-determining Grok pattern for group '{group}': {format_e}", exc_info=True)
+
+            group_grok_patterns[group] = group_pattern
+
+            # Build task list with only existing, valid files
+            valid_files = [f for f in files if isinstance(f, str) and os.path.isfile(f)]
             tasks.extend([(group, file_path) for file_path in valid_files])
-            if len(valid_files) < len(files):
-                 self._logger.warning(f"Group '{group}': Found {len(files) - len(valid_files)} missing files.")
+            missing_count = len(files) - len(valid_files)
+            if missing_count > 0:
+                 self._logger.warning(f"Group '{group}': Found {missing_count} missing or invalid file paths.")
             total_files += len(valid_files)
 
         if total_files == 0:
-            self._logger.warning("No existing log files found in any group.")
+            self._logger.warning("No existing log files found across all provided groups.")
             return {}
 
-        self._logger.info(f"Prepared {total_files} files for parsing using {num_threads} worker(s).")
+        self._logger.info(f"Prepared {total_files} files for Grok parsing using {num_threads} worker(s).")
         print(f"\n=== Starting Group Log Parsing ({total_files} files using {num_threads} worker(s)) ===")
 
-        progress: Dict[str, List[str]] = {group: [] for group in groups}
-        processed_files = 0
+        # --- Execute Parsing (Sequential or Parallel) ---
+        progress: Dict[str, List[str]] = {group: [] for group in groups} # Stores successful output CSV paths
+        processed_files_count = 0
 
-        # --- Conditional Execution ---
         if num_threads <= 1:
-            # --- Sequential ---
-            self._logger.info("Running in sequential mode.")
-            sequential_agent = SimpleDrainLogParserAgent(self._model_instance_for_sequential)
-            # Determine if the overwriting progress bar should be used
-            use_progress_bar = not show_progress
+            # --- Sequential Execution ---
+            self._logger.info("Running Grok parsing in sequential mode.")
+            # Use the main model instance
+            sequential_agent = SimpleGrokLogParserAgent(self._model_instance)
+            use_progress_bar = not show_progress # Use bar only if hiding detailed output
 
             for group, file_path in tasks:
-                processed_files += 1
+                processed_files_count += 1
                 base_name = os.path.basename(file_path)
-                if use_progress_bar: self._update_progress_bar(processed_files, total_files, current_file=base_name)
-                else: print(f"\n[File {processed_files}/{total_files}] Processing: {base_name} (Group: {group})")
+                if use_progress_bar: self._update_progress_bar(processed_files_count, total_files, current_file=base_name)
+                else: print(f"\n[File {processed_files_count}/{total_files}] Processing: {base_name} (Group: {group})")
 
                 try:
-                    initial_format = group_formats.get(group)
-                    state: SimpleDrainLogParserState = {
-                        "log_file_path": file_path, "log_format": initial_format,
-                        "output_csv_path": "", "sample_logs": ""
+                    # *** Use the Grok State ***
+                    initial_state: SimpleGrokLogParserState = {
+                        "log_file_path": file_path,
+                        "grok_pattern": group_grok_patterns.get(group), # Use pre-determined pattern if available
+                        "output_csv_path": "", "sample_logs": "",
+                        "parsed_lines": 0, "skipped_lines": 0
                     }
-                    # Pass the show_progress flag correctly
-                    result = sequential_agent.run(state, show_progress=show_progress)
+                    # Pass the show_progress flag (less relevant for Grok output but maintains interface)
+                    result = sequential_agent.run(initial_state, show_progress=show_progress)
 
-                    # Report success/failure only if not using progress bar
-                    if result.get("output_csv_path"):
-                        progress[group].append(result["output_csv_path"])
-                        if not use_progress_bar: print(f"[File {processed_files}/{total_files}] SUCCESS: {base_name}")
-                    elif not use_progress_bar: print(f"[File {processed_files}/{total_files}] FAILED: {base_name}")
+                    output_csv = result.get("output_csv_path")
+                    if output_csv:
+                        progress[group].append(output_csv)
+                        if not use_progress_bar: print(f"[File {processed_files_count}/{total_files}] SUCCESS: {base_name} -> {os.path.basename(output_csv)}")
+                    elif not use_progress_bar: print(f"[File {processed_files_count}/{total_files}] FAILED: {base_name} (Parsed: {result.get('parsed_lines', 0)}, Skipped: {result.get('skipped_lines', 0)})")
                 except Exception as e:
-                    self._logger.error(f"Sequential run failed for {base_name}: {e}", exc_info=True)
-                    if not use_progress_bar: print(f"[File {processed_files}/{total_files}] ERROR (Agent): {base_name} - {e}")
+                    self._logger.error(f"Sequential Grok run failed for {base_name}: {e}", exc_info=True)
+                    if not use_progress_bar: print(f"[File {processed_files_count}/{total_files}] ERROR (Agent): {base_name} - {e}")
 
-            if use_progress_bar: self._update_progress_bar(total_files, total_files, force_newline=True)
+            if use_progress_bar: self._update_progress_bar(total_files, total_files, force_newline=True) # Final newline for the bar
 
         else:
-            # --- Parallel ---
-            self._logger.info(f"Running in parallel mode (threads={num_threads}).")
-            # Always use simple prints for parallel progress, regardless of show_progress flag
-            effective_show_progress_for_print = True
-            if not show_progress:
-                 print("NOTE: Detailed progress bar disabled in parallel mode. Drain output suppressed.")
+            # --- Parallel Execution ---
+            self._logger.info(f"Running Grok parsing in parallel mode (max_workers={num_threads}).")
+            # Progress bar is usually not practical with parallel console output
+            print("Parallel mode: Progress updates will be printed per file.")
 
             with concurrent.futures.ProcessPoolExecutor(max_workers=num_threads) as executor:
+                # Map futures to their original task info
                 future_to_task = {
-                    executor.submit(_parse_file_worker, file_path, group_formats.get(group), show_progress): (group, file_path)
-                    for group, file_path in tasks # Uses pre-filtered tasks
+                    # *** Submit work using the UPDATED worker function ***
+                    executor.submit(_parse_file_worker, file_path, group_grok_patterns.get(group), show_progress): (group, file_path)
+                    for group, file_path in tasks # Use pre-filtered tasks
                 }
+
                 for future in concurrent.futures.as_completed(future_to_task):
                     original_group, original_file_path = future_to_task[future]
                     base_name = os.path.basename(original_file_path)
-                    processed_files += 1
+                    processed_files_count += 1
                     try:
                         _, output_path = future.result() # Unpack result from worker
-                        # Always use simple print for progress in parallel mode
                         if output_path:
-                            print(f"[File {processed_files}/{total_files}] SUCCESS: {base_name} (Group: {original_group})", flush=True)
-                            progress[original_group].append(output_path)
+                            print(f"[File {processed_files_count}/{total_files}] SUCCESS: {base_name} (Group: {original_group}) -> {os.path.basename(output_path)}", flush=True)
+                            # Safely append to the shared progress dict (might need locking in extreme cases, but usually okay for appending lists)
+                            if original_group in progress:
+                                progress[original_group].append(output_path)
+                            else:
+                                self._logger.warning(f"Group '{original_group}' not found in progress dict while processing parallel result.")
                         else:
-                            print(f"[File {processed_files}/{total_files}] FAILED: {base_name} (Group: {original_group})", flush=True)
+                            print(f"[File {processed_files_count}/{total_files}] FAILED: {base_name} (Group: {original_group})", flush=True)
                     except Exception as e:
-                        self._logger.error(f"Error processing future for {base_name}: {e}", exc_info=True)
-                        print(f"[File {processed_files}/{total_files}] ERROR (Future): {base_name} - {e}", flush=True)
+                        # Log the error associated with the future/worker
+                        self._logger.error(f"Error processing Grok future for {base_name}: {e}", exc_info=True)
+                        print(f"[File {processed_files_count}/{total_files}] ERROR (Future): {base_name} - {e}", flush=True)
 
         print(f"\n=== Finished Group Log Parsing ===")
         return progress
@@ -361,12 +654,19 @@ class GroupLogParserAgent:
         clear_len=80; progress_line=f"\rProgress: [{bar}] {percentage}% ({current}/{total}) Processing: {display_file:<{max_filename_len+2}}"; progress_line+=" "*(clear_len-len(progress_line)); sys.stdout.write(progress_line); sys.stdout.flush();
         if force_newline or (total>0 and current==total): sys.stdout.write('\n'); sys.stdout.flush();
 
+
     def run(self, num_threads: int = 1, show_progress: bool = False) -> dict:
-        """Fetches groups and initiates parsing respecting flags."""
+        """Fetches groups and initiates Grok parsing respecting flags."""
         groups = self.fetch_groups()
-        if groups is None: self._logger.error("Cannot proceed without groups."); return {}
-        if num_threads < 1: num_threads = 1
-        return self.parse_all_logs(groups, num_threads=num_threads, show_progress=show_progress)
+        if groups is None:
+            self._logger.error("Cannot proceed with parsing: Failed to fetch groups.")
+            return {}
+        if not groups:
+             self._logger.warning("No groups found to parse.")
+             return {}
+        # Ensure num_threads is at least 1 for sequential mode
+        effective_num_threads = max(1, num_threads)
+        return self.parse_all_logs(groups, num_threads=effective_num_threads, show_progress=show_progress)
 
 
 # --- __main__ block for testing (optional) ---
