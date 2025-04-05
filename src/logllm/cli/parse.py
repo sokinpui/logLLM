@@ -194,7 +194,7 @@ def register_parse_parser(subparsers):
 
     # --- Show Progress Flag ---
     parse_parser.add_argument(
-        '--show',
+        '-v', '--show-progress',
         action='store_true', # Sets args.show_progress to True if flag is present
         help='Show Drain internal parsing progress/output instead of suppressing it.'
     )
