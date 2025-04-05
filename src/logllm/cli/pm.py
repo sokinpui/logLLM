@@ -195,7 +195,7 @@ def register_pm_parser(subparsers):
     add_parser.set_defaults(func=handle_pm_add)
 
     # 'delete' action
-    delete_parser = pm_subparsers.add_parser("delete", help="Delete keys from the prompt store")
+    delete_parser = pm_subparsers.add_parser("rm", help="Delete keys from the prompt store")
     delete_parser.add_argument("-k", "--key", type=str, nargs="+", required=True, help="Keys to delete")
     # delete_parser.add_argument("--verbose", action="store_true", help="Print the entire prompt store content") # Handled by --verbose-pm
     delete_parser.add_argument("-m", "--message", type=str, nargs="?", default=None, const="",
