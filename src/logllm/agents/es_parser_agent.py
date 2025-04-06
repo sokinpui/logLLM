@@ -52,6 +52,7 @@ class SingleGroupParserState(TypedDict):
     generated_grok_pattern: Optional[str]
     parsing_status: str
     parsing_result: Optional[ScrollGrokParserState]
+    fallback_used: bool # <--- Added flag
 
 class AllGroupsParserState(TypedDict):
     group_info_index: str
@@ -322,70 +323,138 @@ class SingleGroupParserAgent:
     # run (Uses sample_size from state, passes batch_size down)
     def run(self, initial_state: SingleGroupParserState) -> SingleGroupParserState:
         group_name = initial_state['group_name']
-        sample_size = initial_state['sample_size'] # <--- Get sample size
-        batch_size = initial_state['batch_size']   # <--- Get batch size
+        sample_size = initial_state['sample_size']
+        batch_size = initial_state['batch_size']
         self._logger.info(f"Starting SingleGroupParserAgent run for group: '{group_name}', SampleSize: {sample_size}, BatchSize: {batch_size}")
+
         result_state = initial_state.copy()
-        # ... (rest of initialization) ...
         result_state["parsing_status"] = "running"
         result_state["generated_grok_pattern"] = None
         result_state["parsing_result"] = None
+        result_state["fallback_used"] = False # Initialize fallback flag
 
+        # 1. Determine Indices
         try:
              source_index = cfg.get_log_storage_index(group_name)
              target_index = cfg.get_parsed_log_storage_index(group_name)
              result_state["source_index"] = source_index
              result_state["target_index"] = target_index
+             self._logger.info(f"Determined indices for group '{group_name}': Source='{source_index}', Target='{target_index}'")
         except Exception as e:
-             self._logger.error(f"Failed to determine indices for group '{group_name}': {e}")
-             result_state["parsing_status"] = "failed"; return result_state
-
-        field_to_parse = initial_state['field_to_parse']
-        # Use the sample_size from the state
-        sample_lines = self._get_sample_lines(source_index, field_to_parse, sample_size)
-        if not sample_lines:
-            self._logger.warning(f"No sample lines found for group '{group_name}'. Cannot generate pattern.")
-            result_state["parsing_status"] = "failed"; return result_state
-
-        grok_pattern = self._generate_grok_pattern(sample_lines)
-        if not grok_pattern:
-            self._logger.error(f"Failed to generate Grok pattern for group '{group_name}'.")
-            result_state["parsing_status"] = "failed"; return result_state
-        result_state["generated_grok_pattern"] = grok_pattern
-        result_state["parsing_status"] = "pattern_generated"
-
-        source_query = {"query": {"match_all": {}}} # Ensure query is wrapped
-
-        # Prepare state for the lower-level agent, passing the batch_size
-        scroll_parser_state: ScrollGrokParserState = {
-            "source_index": source_index,
-            "target_index": target_index,
-            "grok_pattern": grok_pattern,
-            "field_to_parse": field_to_parse,
-            "source_query": source_query,
-            "fields_to_copy": initial_state.get("fields_to_copy"),
-            "batch_size": batch_size, # <--- Pass batch size down
-            "processed_count": 0, "indexed_count": 0, "error_count": 0, "status": "pending"
-        }
-
-        try:
-             self._logger.info(f"Invoking ScrollGrokParserAgent for group '{group_name}'...")
-             result_state["parsing_status"] = "parsing_running"
-             parsing_result = self._scroll_parser_agent.run(scroll_parser_state)
-             result_state["parsing_result"] = parsing_result
-             if parsing_result["status"] == "completed":
-                  result_state["parsing_status"] = "completed"
-                  self._logger.info(f"Successfully completed parsing for group '{group_name}'.")
-             else:
-                  result_state["parsing_status"] = "failed"
-                  self._logger.error(f"Parsing failed for group '{group_name}'.")
-        except Exception as e:
-             self._logger.error(f"Error invoking ScrollGrokParserAgent for group '{group_name}': {e}")
+             self._logger.error(f"Failed to determine indices for group '{group_name}': {e}", exc_info=True)
              result_state["parsing_status"] = "failed"
-             if 'parsing_result' not in result_state or result_state["parsing_result"] is None:
-                  scroll_parser_state["status"] = "failed"
-                  result_state["parsing_result"] = scroll_parser_state
+             return result_state
 
+        # 2. Get Sample Logs
+        field_to_parse = initial_state['field_to_parse']
+        sample_lines = self._get_sample_lines(source_index, field_to_parse, sample_size)
+        # Don't fail immediately if no samples, LLM might still produce a generic pattern or user might provide one later?
+        # However, pattern generation will likely fail. Let's proceed and let that fail.
+        if not sample_lines:
+            self._logger.warning(f"No sample lines found for group '{group_name}'. Pattern generation likely to fail.")
+
+        # 3. Generate Grok Pattern (Initial Attempt)
+        grok_pattern = self._generate_grok_pattern(sample_lines)
+        if grok_pattern:
+            result_state["generated_grok_pattern"] = grok_pattern
+            result_state["parsing_status"] = "pattern_generated"
+        else:
+            # If pattern generation fails entirely, we can't even try the primary parse.
+            # Should we attempt fallback immediately or fail? Let's try fallback.
+            self._logger.warning(f"Failed to generate Grok pattern for group '{group_name}'. Attempting fallback.")
+            grok_pattern = None # Ensure primary parse isn't attempted
+
+        # --- Attempt Primary Parsing (if pattern was generated) ---
+        initial_parsing_successful = False
+        if grok_pattern:
+            source_query = {"query": {"match_all": {}}}
+            scroll_parser_state_initial: ScrollGrokParserState = {
+                "source_index": source_index, "target_index": target_index,
+                "grok_pattern": grok_pattern, "field_to_parse": field_to_parse,
+                "source_query": source_query, "fields_to_copy": initial_state.get("fields_to_copy"),
+                "batch_size": batch_size, "processed_count": 0, "indexed_count": 0,
+                "error_count": 0, "status": "pending"
+            }
+            try:
+                 self._logger.info(f"Invoking ScrollGrokParserAgent (Attempt 1) for group '{group_name}' with generated pattern...")
+                 result_state["parsing_status"] = "parsing_running"
+                 parsing_result_initial = self._scroll_parser_agent.run(scroll_parser_state_initial)
+                 result_state["parsing_result"] = parsing_result_initial # Store initial result for now
+
+                 # Define success criteria for the *initial* attempt
+                 # Success = completed status AND at least some documents were indexed OR
+                 # completed status AND zero processed (source index was empty).
+                 is_completed = parsing_result_initial["status"] == "completed"
+                 processed_count = parsing_result_initial.get("processed_count", 0)
+                 indexed_count = parsing_result_initial.get("indexed_count", 0)
+
+                 if is_completed and (indexed_count > 0 or processed_count == 0) :
+                      initial_parsing_successful = True
+                      self._logger.info(f"Initial parsing attempt SUCCEEDED for group '{group_name}'.")
+                 else:
+                      self._logger.warning(f"Initial parsing attempt for group '{group_name}' deemed UNSUCCESSFUL (Status: {parsing_result_initial['status']}, Processed: {processed_count}, Indexed: {indexed_count}). Attempting fallback.")
+
+            except Exception as e:
+                 self._logger.error(f"Error during initial ScrollGrokParserAgent invocation for group '{group_name}': {e}", exc_info=True)
+                 result_state["parsing_status"] = "failed" # Mark outer status
+                 # Store the failed state attempt
+                 scroll_parser_state_initial["status"] = "failed"
+                 result_state["parsing_result"] = scroll_parser_state_initial
+                 initial_parsing_successful = False # Ensure fallback is triggered if needed
+
+
+        # --- Fallback Logic ---
+        if not initial_parsing_successful:
+            result_state["fallback_used"] = True
+            fallback_grok_pattern = "%{GREEDYDATA:message}" # Simple fallback pattern
+            self._logger.warning(f"Executing FALLBACK parsing for group '{group_name}' using pattern: {fallback_grok_pattern}")
+
+            # Re-prepare the state for the scroll parser with the fallback pattern
+            source_query = {"query": {"match_all": {}}} # Reset query just in case
+            scroll_parser_state_fallback: ScrollGrokParserState = {
+                "source_index": source_index, "target_index": target_index,
+                "grok_pattern": fallback_grok_pattern, # Use fallback pattern
+                "field_to_parse": field_to_parse,
+                "source_query": source_query, "fields_to_copy": initial_state.get("fields_to_copy"),
+                "batch_size": batch_size, "processed_count": 0, "indexed_count": 0,
+                "error_count": 0, "status": "pending"
+            }
+            try:
+                 # Run the scroll parser again with the fallback pattern
+                 parsing_result_fallback = self._scroll_parser_agent.run(scroll_parser_state_fallback)
+                 # *** Overwrite the parsing_result with the fallback result ***
+                 result_state["parsing_result"] = parsing_result_fallback
+
+                 # Update overall status based on fallback result
+                 if parsing_result_fallback["status"] == "completed":
+                      result_state["parsing_status"] = "completed_fallback" # Use a specific status
+                      self._logger.info(f"Fallback parsing completed for group '{group_name}'.")
+                 else:
+                      result_state["parsing_status"] = "failed_fallback" # Indicate fallback itself failed
+                      self._logger.error(f"Fallback parsing FAILED for group '{group_name}'.")
+
+            except Exception as e:
+                 self._logger.error(f"Error during FALLBACK ScrollGrokParserAgent invocation for group '{group_name}': {e}", exc_info=True)
+                 result_state["parsing_status"] = "failed_fallback"
+                 # Store the failed fallback state attempt
+                 scroll_parser_state_fallback["status"] = "failed"
+                 result_state["parsing_result"] = scroll_parser_state_fallback
+
+        # --- Final Status Update ---
+        # If initial parsing was successful, the status is already 'completed' (implicitly)
+        # If initial failed and fallback succeeded, status is 'completed_fallback'
+        # If initial failed and fallback failed, status is 'failed_fallback'
+        # If pattern generation failed and fallback succeeded, status is 'completed_fallback'
+        # If pattern generation failed and fallback failed, status is 'failed_fallback'
+
+        # Simplify final status for overall reporting?
+        final_status = result_state["parsing_status"]
+        if final_status in ["completed", "completed_fallback"]:
+             final_log_status = "SUCCESS"
+        else:
+             final_log_status = "FAILURE"
+
+        self._logger.info(f"Finished SingleGroupParserAgent run for group '{group_name}'. Final Status: {final_status} ({final_log_status})")
         return result_state
 
 

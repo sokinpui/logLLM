@@ -145,13 +145,21 @@ def handle_es_parse(args):
                      status = group_result.get("parsing_status", "unknown")
                      pattern = group_result.get("generated_grok_pattern", "N/A")
                      parse_result = group_result.get("parsing_result")
+                     fallback = group_result.get("fallback_used", False) # Get fallback flag
                      processed = parse_result.get("processed_count", 0) if parse_result else 0
                      indexed = parse_result.get("indexed_count", 0) if parse_result else 0
                      errors = parse_result.get("error_count", 0) if parse_result else 0
 
                      print(f"\nGroup '{group_name}':")
-                     print(f"  Status: {status}")
-                     print(f"  Grok Pattern Used: {pattern}")
+                     print(f"  Status: {status}{' (Fallback Used)' if fallback else ''}") # Indicate fallback
+                     # Only show generated pattern if fallback wasn't used or it was generated before fallback
+                     if pattern != "N/A" and not fallback:
+                        print(f"  Generated Grok Pattern: {pattern}")
+                     elif fallback:
+                        print(f"  Original Pattern Failed (Fallback: %{{GREEDYDATA:message}})")
+                     else:
+                        print(f"  Pattern Generation Failed") # If pattern is N/A and fallback wasn't explicitly used
+
                      print(f"  Docs Scanned: {processed}, Docs Indexed: {indexed}, Errors: {errors}")
 
                      if status == "completed" and errors == 0:
