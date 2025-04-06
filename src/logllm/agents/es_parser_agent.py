@@ -62,6 +62,78 @@ class AllGroupsParserState(TypedDict):
     group_results: Dict[str, SingleGroupParserState]
     status: str
 
+def _parallel_group_worker(
+    group_info: Dict[str, Any],
+    field_to_parse: str,
+    fields_to_copy: Optional[List[str]],
+    batch_size: int,
+    sample_size: int,
+    prompts_json_path: str # Need path to initialize PromptsManager in worker
+    # Add other necessary config if needed (e.g., model name, db url)
+) -> Tuple[str, SingleGroupParserState]:
+    """
+    Worker function executed by each process to parse a single group.
+    Initializes its own dependencies.
+    """
+    group_name = group_info.get("group_name", "UnknownGroup")
+    # Initialize dependencies within the worker process
+    # This ensures objects are created in the child process, avoiding pickle issues
+    worker_logger = Logger() # Or configure logging specific to workers if needed
+    worker_logger.info(f"[Worker-{os.getpid()}] Processing Group: {group_name}")
+
+    try:
+        # It's generally safer to re-initialize potentially non-pickleable/stateful objects
+        db_worker = ElasticsearchDatabase()
+        if db_worker.instance is None:
+            raise ConnectionError("Worker failed to connect to Elasticsearch.")
+
+        # Model initialization needs API keys (ensure env vars are inherited)
+        model_worker = GeminiModel() # Or pass model name if configurable
+
+        # PromptsManager needs the path to the JSON file
+        prompts_manager_worker = PromptsManager(json_file=prompts_json_path)
+
+        # Initialize the agent that handles the single group logic
+        sg_agent_worker = SingleGroupParserAgent(
+            model=model_worker,
+            db=db_worker,
+            prompts_manager=prompts_manager_worker
+        )
+
+        # Prepare the initial state for the single group agent
+        single_group_state: SingleGroupParserState = {
+            "group_name": group_name,
+            "field_to_parse": field_to_parse,
+            "fields_to_copy": fields_to_copy,
+            "batch_size": batch_size,
+            "sample_size": sample_size,
+            # Set defaults or derive from group_info if needed
+            "group_id_field": None,
+            "group_id_value": None,
+            "source_index": "", # Will be set by agent run
+            "target_index": "", # Will be set by agent run
+            "generated_grok_pattern": None,
+            "parsing_status": "pending",
+            "parsing_result": None
+        }
+
+        # Run the single group parsing logic
+        final_state = sg_agent_worker.run(single_group_state)
+        worker_logger.info(f"[Worker-{os.getpid()}] Finished Group: {group_name}, Status: {final_state['parsing_status']}")
+        return group_name, final_state
+
+    except Exception as e:
+        worker_logger.error(f"[Worker-{os.getpid()}] Error processing group '{group_name}': {e}", exc_info=True)
+        # Return a failed state if an unexpected error occurs during worker execution
+        failed_state: SingleGroupParserState = {
+             "group_name": group_name, "parsing_status": "failed",
+             "field_to_parse": field_to_parse, "fields_to_copy": fields_to_copy,
+             "batch_size": batch_size, "sample_size": sample_size,
+             "source_index": "", "target_index": "", "generated_grok_pattern": None,
+             "parsing_result": None # Indicate failure
+        }
+        return group_name, failed_state
+
 # --- ScrollGrokParserAgent ---
 class ScrollGrokParserAgent:
     # Removed hardcoded BATCH_SIZE
@@ -348,13 +420,12 @@ class AllGroupsParserAgent:
     def run(
         self,
         initial_state: AllGroupsParserState,
-        num_threads: int = 1,
-        batch_size: int = 5000, # <--- Added batch_size arg
-        sample_size: int = 20   # <--- Added sample_size arg
+        num_threads: int = 1, # Note: Argument name is threads, but uses ProcessPoolExecutor
+        batch_size: int = 5000,
+        sample_size: int = 20
     ) -> AllGroupsParserState:
-        self._logger.info(f"Starting AllGroupsParserAgent run. Group Index: '{initial_state['group_info_index']}'. Threads: {num_threads}, BatchSize: {batch_size}, SampleSize: {sample_size}")
+        self._logger.info(f"Starting AllGroupsParserAgent run. Group Index: '{initial_state['group_info_index']}'. Workers: {num_threads}, BatchSize: {batch_size}, SampleSize: {sample_size}")
         result_state = initial_state.copy()
-        # ... (rest of initialization) ...
         result_state["status"] = "running"
         result_state["group_results"] = {}
 
@@ -364,9 +435,13 @@ class AllGroupsParserAgent:
 
         field_to_parse = initial_state['field_to_parse']
         fields_to_copy = initial_state.get('fields_to_copy')
-        effective_num_threads = max(1, num_threads)
+        effective_num_workers = max(1, num_threads) # Use 'workers' internally for clarity
 
-        if effective_num_threads <= 1:
+        # Need the path for the prompts file to pass to workers
+        prompts_json_path = self._prompts_manager.json_file
+
+        if effective_num_workers <= 1:
+            # --- Sequential Execution (remains largely the same) ---
             self._logger.info("Running group parsing sequentially.")
             for group_info in groups_to_process:
                 group_name = group_info["group_name"]
@@ -375,9 +450,8 @@ class AllGroupsParserAgent:
                     "group_name": group_name,
                     "field_to_parse": field_to_parse,
                     "fields_to_copy": fields_to_copy,
-                    "batch_size": batch_size, # <--- Pass batch_size
-                    "sample_size": sample_size, # <--- Pass sample_size
-                    # ... other fields ...
+                    "batch_size": batch_size,
+                    "sample_size": sample_size,
                     "group_id_field": None,"group_id_value": None,"source_index": "","target_index": "",
                     "generated_grok_pattern": None,"parsing_status": "pending","parsing_result": None
                 }
@@ -389,47 +463,35 @@ class AllGroupsParserAgent:
                     single_group_state["parsing_status"] = "failed"
                     result_state["group_results"][group_name] = single_group_state
         else:
-            self._logger.info(f"Running group parsing in parallel with {effective_num_threads} workers.")
-            # Worker function needs to accept sizes
-            def group_worker(group_info: Dict[str, Any], worker_batch_size: int, worker_sample_size: int) -> Tuple[str, SingleGroupParserState]: # <--- Added size args
-                group_name = group_info["group_name"]
-                worker_logger = Logger()
-                worker_logger.info(f"[Worker] Processing Group: {group_name}")
-                single_group_state: SingleGroupParserState = {
-                    "group_name": group_name,
-                    "field_to_parse": field_to_parse,
-                    "fields_to_copy": fields_to_copy,
-                    "batch_size": worker_batch_size, # <--- Use worker batch_size
-                    "sample_size": worker_sample_size, # <--- Use worker sample_size
-                    # ... other fields ...
-                    "group_id_field": None,"group_id_value": None,"source_index": "","target_index": "",
-                    "generated_grok_pattern": None,"parsing_status": "pending","parsing_result": None
-                }
-                try:
-                     # Use the main instance of the agent or re-init dependencies if needed
-                     final_state = self._single_group_agent.run(single_group_state)
-                     worker_logger.info(f"[Worker] Finished Group: {group_name}, Status: {final_state['parsing_status']}")
-                     return group_name, final_state
-                except Exception as e:
-                    worker_logger.error(f"[Worker] Error processing group '{group_name}': {e}")
-                    single_group_state["parsing_status"] = "failed"
-                    return group_name, single_group_state
-
-            with concurrent.futures.ProcessPoolExecutor(max_workers=effective_num_threads) as executor:
+            # --- Parallel Execution (Use the top-level worker) ---
+            self._logger.info(f"Running group parsing in parallel with {effective_num_workers} workers.")
+            with concurrent.futures.ProcessPoolExecutor(max_workers=effective_num_workers) as executor:
                 future_to_group = {
-                    # Pass sizes to the worker function
-                    executor.submit(group_worker, group_info, batch_size, sample_size): group_info["group_name"]
+                    # Submit the top-level worker function, passing necessary args
+                    executor.submit(
+                        _parallel_group_worker, # The top-level function
+                        group_info,
+                        field_to_parse,
+                        fields_to_copy,
+                        batch_size,
+                        sample_size,
+                        prompts_json_path # Pass the path
+                     ): group_info["group_name"]
                     for group_info in groups_to_process
                 }
+
                 for future in concurrent.futures.as_completed(future_to_group):
                     group_name_future = future_to_group[future]
                     try:
+                        # Result is (group_name, final_state) from the worker
                         group_name_result, final_state = future.result()
                         result_state["group_results"][group_name_result] = final_state
                     except Exception as e:
-                         self._logger.error(f"Error retrieving result for group '{group_name_future}': {e}")
+                         # Error during future.result() (e.g., worker raised exception, pickling failed on return)
+                         self._logger.error(f"Error retrieving result for group '{group_name_future}' from worker: {e}", exc_info=True)
+                         # Create a failure state if result couldn't be obtained
                          failed_state : SingleGroupParserState = result_state["group_results"].get(group_name_future, {"group_name": group_name_future, "parsing_status": "failed"})
-                         failed_state["parsing_status"] = "failed"
+                         failed_state["parsing_status"] = "failed" # Ensure status is failed
                          result_state["group_results"][group_name_future] = failed_state
 
         result_state["status"] = "completed"
