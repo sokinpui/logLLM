@@ -65,11 +65,16 @@ INDEX_LAST_LINE_STATUS = "log_last_line_status"
 
 INDEX_LOG_FILES_STORAGE = "log_files"
 
-def get_log_stroage_index(group : str) -> str:
+def get_log_storage_index(group : str) -> str:
     """
-    return log file index name that store log file for event_id
+    Return the Elasticsearch index name where RAW logs for a group are stored.
+    (Adjust logic based on how your Collector stores raw logs).
+    Example: Assumes collector stores in 'log_<group_name>'
     """
-    return f"log_{group}"
+    # Basic cleaning for index name compatibility
+    clean_group = group.replace(" ", "_").replace("/", "_").replace(".", "_").lower()
+    return f"log_{clean_group}"
+
 
 INDEX_EVENTS_STORAGE = "events"
 
@@ -102,11 +107,11 @@ def get_pre_process_index(event_id : int) -> str:
 
 def get_parsed_log_storage_index(group: str) -> str:
     """
-    Generates an Elasticsearch index name for storing parsed/structured logs
+    Generates an Elasticsearch index name for storing PARSED/STRUCTURED logs
     based on the original log group name.
     """
     # Ensure group name is filesystem/index friendly (basic cleaning)
-    clean_group = group.replace(" ", "_").replace("/", "_").lower()
+    clean_group = group.replace(" ", "_").replace("/", "_").replace(".", "_").lower()
     return f"parsed_log_{clean_group}"
 
 # Maximum Memory context sie for analyze agent to store summary
