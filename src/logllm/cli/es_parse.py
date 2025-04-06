@@ -223,7 +223,7 @@ def register_es_parse_parser(subparsers):
     es_parse_parser.add_argument(
         '-s', '--sample-size',
         type=int,
-        default=20,
+        default=10,
         help='Number of log lines to sample for LLM Grok pattern generation (default: 20).'
     )
 

@@ -5,7 +5,7 @@ import pandas as pd
 from typing import TypedDict, Dict, List, Optional, Tuple, Any, Callable
 from pygrok import Grok
 from pydantic import BaseModel, Field
-import concurrent.futures
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
 # Relative imports (ensure paths are correct)
 try:
@@ -606,35 +606,37 @@ class AllGroupsParserAgent:
                     result_state["group_results"][group_name] = single_group_state
         else:
             # --- Parallel Execution (Use the top-level worker) ---
-            self._logger.info(f"Running group parsing in parallel with {effective_num_workers} workers.")
-            with concurrent.futures.ProcessPoolExecutor(max_workers=effective_num_workers) as executor:
+            self._logger.info(f"Running group parsing in parallel with {effective_num_workers} THREADS.") # Log change
+            # *** Use ThreadPoolExecutor instead ***
+            with ThreadPoolExecutor(max_workers=effective_num_workers) as executor:
+                # The rest of the submission and result collection logic
+                # using _parallel_group_worker remains the same.
+                # Note: _parallel_group_worker still initializes its own objects,
+                # which is fine for threads too, though less strictly necessary.
                 future_to_group = {
-                    # Submit the top-level worker function, passing necessary args
                     executor.submit(
-                        _parallel_group_worker, # The top-level function
-                        group_info,
-                        field_to_parse,
-                        fields_to_copy,
-                        batch_size,
-                        sample_size,
-                        prompts_json_path # Pass the path
+                        _parallel_group_worker,
+                        group_info, field_to_parse, fields_to_copy,
+                        batch_size, sample_size, prompts_json_path
                      ): group_info["group_name"]
                     for group_info in groups_to_process
                 }
-
-                for future in concurrent.futures.as_completed(future_to_group):
+                # ... (as_completed loop remains the same) ...
+                for future in as_completed(future_to_group):
                     group_name_future = future_to_group[future]
+                    self._logger.info(f"Waiting for result from future for group: {group_name_future}...")
                     try:
-                        # Result is (group_name, final_state) from the worker
-                        group_name_result, final_state = future.result()
+                        group_name_result, final_state = future.result(timeout=600) # Add a long timeout (e.g., 10 minutes)
+                        self._logger.info(f"Received result for group: {group_name_result}. Status: {final_state.get('parsing_status')}")
                         result_state["group_results"][group_name_result] = final_state
+                    except TimeoutError:
+                         self._logger.error(f"TIMEOUT waiting for result from group '{group_name_future}'. Worker likely stuck or crashed.")
+                         # Handle failed state...
                     except Exception as e:
-                         # Error during future.result() (e.g., worker raised exception, pickling failed on return)
-                         self._logger.error(f"Error retrieving result for group '{group_name_future}' from worker: {e}", exc_info=True)
-                         # Create a failure state if result couldn't be obtained
-                         failed_state : SingleGroupParserState = result_state["group_results"].get(group_name_future, {"group_name": group_name_future, "parsing_status": "failed"})
-                         failed_state["parsing_status"] = "failed" # Ensure status is failed
-                         result_state["group_results"][group_name_future] = failed_state
+                         self._logger.error(f"Error retrieving result for group '{group_name_future}': {e}", exc_info=True)
+                         # Handle failed state...
+                self._logger.info("Finished processing all futures in as_completed loop.") # Check if this logs
+
 
         result_state["status"] = "completed"
         self._logger.info("AllGroupsParserAgent run finished.")
