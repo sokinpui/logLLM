@@ -403,70 +403,76 @@ class ElasticsearchDatabase(Database):
             self._logger.info(f"Finished scroll/batch processing on index '{index}'. Total documents processed: {total_processed}")
             return total_processed, total_hits_estimate
 
-        # --- NEW METHOD for Bulk Indexing ---
-    def bulk_index(
-        self,
+    # --- NEW METHOD for Bulk Indexing ---
+    def bulk_operation(
+            self,
             actions: List[Dict[str, Any]],
-            index: str,
-            raise_on_error: bool = False
+            raise_on_error: bool = False,
+            **kwargs # Allow passing other helpers.bulk kwargs like request_timeout
         ) -> Tuple[int, List[Dict[str, Any]]]:
         """
-        Performs a bulk indexing operation.
+        Performs a bulk operation (index, update, delete) using pre-formatted actions.
 
         Args:
-            actions: A list of bulk actions (documents to index). Each document
-                     should be the '_source' part. The '_index' will be added.
-                     Example action list item: {"field1": "value1", "field2": "value2"}
-            index: The target index name.
+            actions: A list of bulk action dictionaries. Each dict represents one
+                     action line (e.g., {"update": {"_index": "my-index", "_id": "1"}})
+                     followed potentially by a data line (e.g., {"doc": {...}, "doc_as_upsert": True}).
+                     The format should follow Elasticsearch bulk API syntax.
             raise_on_error: If True, raises the first BulkIndexError encountered.
-                            If False, logs errors and returns them.
+                            If False (default), logs errors and returns them.
+            kwargs: Additional keyword arguments to pass to elasticsearch.helpers.bulk.
 
         Returns:
             A tuple (number_of_successes, list_of_errors).
             Each error dict contains details about the failed operation.
         """
         if self.instance is None:
-            self._logger.error("Elasticsearch instance not initialized. Cannot perform bulk index.")
+            self._logger.error("Elasticsearch instance not initialized. Cannot perform bulk operation.")
             return 0, [{"error": "Elasticsearch connection failed"}]
         if not actions:
-            self._logger.info("No actions provided for bulk indexing.")
+            self._logger.info("No actions provided for bulk operation.")
             return 0, []
 
-        # Prepare actions in the format required by helpers.bulk
-        # Each action needs at least _index and _source
-        formatted_actions = [
-            {
-                "_index": index,
-                "_source": doc
-            }
-            for doc in actions
-        ]
+        # Set default timeout if not provided
+        if 'request_timeout' not in kwargs:
+             kwargs['request_timeout'] = 120 # Increase default timeout for potentially larger bulk updates
 
         try:
-            self._logger.debug(f"Performing bulk index of {len(formatted_actions)} documents into index '{index}'...")
+            self._logger.debug(f"Performing bulk operation with {len(actions)} actions...")
+            # Pass the actions list directly to helpers.bulk
             success_count, errors = helpers.bulk(
                 self.instance,
-                formatted_actions,
-                index=index, # Default index if not specified in action
+                actions, # Pass the pre-formatted actions
                 raise_on_error=raise_on_error,
-                raise_on_exception=raise_on_error, # Control general exceptions
-                request_timeout=60 # Increase timeout for bulk operations
+                raise_on_exception=raise_on_error,
+                **kwargs # Pass additional arguments like timeout
             )
             if errors:
-                 self._logger.error(f"Encountered {len(errors)} errors during bulk indexing to '{index}'.")
-                 # Log first few errors for detail
-                 for i, err in enumerate(errors[:5]):
-                      self._logger.error(f"Bulk Error {i+1}/{len(errors)}: {err}")
-            self._logger.debug(f"Bulk indexing completed for index '{index}'. Successes: {success_count}, Errors: {len(errors)}")
+                 self._logger.error(f"Encountered {len(errors)} errors during bulk operation.")
+                 for i, err in enumerate(errors[:5]): self._logger.error(f"Bulk Error {i+1}/{len(errors)}: {err}")
+            self._logger.debug(f"Bulk operation completed. Successes: {success_count}, Errors: {len(errors)}")
             return success_count, errors
         except helpers.BulkIndexError as e:
-             # This is caught only if raise_on_error=True
-             self._logger.error(f"Bulk indexing failed with BulkIndexError on index '{index}': {len(e.errors)} errors.", exc_info=True)
-             # Return the errors extracted from the exception
-             return 0, e.errors # Should we return partial success count? helpers.bulk doesn't provide it easily on exception.
+             self._logger.error(f"Bulk operation failed with BulkIndexError: {len(e.errors)} errors.", exc_info=True)
+             return 0, e.errors
         except Exception as e:
-            self._logger.error(f"Unexpected error during bulk indexing to '{index}': {e}", exc_info=True)
-            return 0, [{"error": "Unexpected bulk indexing error", "details": str(e)}]
+            self._logger.error(f"Unexpected error during bulk operation: {e}", exc_info=True)
+            return 0, [{"error": "Unexpected bulk operation error", "details": str(e)}]
+
+    # --- (Optional) Keep the old bulk_index for simple cases or deprecate it ---
+    def bulk_index(
+            self,
+            actions: List[Dict[str, Any]],
+            index: str,
+            raise_on_error: bool = False
+        ) -> Tuple[int, List[Dict[str, Any]]]:
+        """
+        [DEPRECATED - Use bulk_operation for more flexibility]
+        Performs a simple bulk indexing operation.
+        """
+        self._logger.warning("Method 'bulk_index' is deprecated. Use 'bulk_operation' with formatted actions.")
+        formatted_actions = [{"_index": index, "_source": doc} for doc in actions]
+        return self.bulk_operation(actions=formatted_actions, raise_on_error=raise_on_error)
 
 
     # --- REFINED/NEW Sampling Method ---

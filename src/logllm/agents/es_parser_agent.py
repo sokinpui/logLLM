@@ -139,6 +139,7 @@ def _parallel_group_worker(
 class ScrollGrokParserAgent:
     # Removed hardcoded BATCH_SIZE
     # BATCH_SIZE = 500
+    _current_batch_data: List[Tuple[str, Dict[str, Any]]] = []
 
     def __init__(self, db: ElasticsearchDatabase):
         self._db = db
@@ -169,81 +170,129 @@ class ScrollGrokParserAgent:
         hit: Dict[str, Any],
         field_to_parse: str,
         fields_to_copy: Optional[List[str]]
-    ) -> Optional[Dict[str, Any]]:
-        if self._grok_instance is None: return None
+    ) -> Optional[Tuple[str, Dict[str, Any]]]: # Return tuple (id, doc)
+        """Parses a single document hit and prepares it for indexing, including its original ID."""
+        if self._grok_instance is None: return None # Grok not ready
+
         source_doc = hit.get("_source", {})
+        source_id = hit.get("_id") # <-- Get the source document ID
+
+        if not source_id:
+            self._logger.warning(f"Source document missing '_id'. Skipping hit.")
+            # This shouldn't happen with standard ES results, but good to check
+            return None
+
         original_content = source_doc.get(field_to_parse)
         if not isinstance(original_content, str):
-            self._logger.warning(f"Field '{field_to_parse}' not found/string in doc ID {hit.get('_id')}. Skipping.")
+            self._logger.warning(f"Field '{field_to_parse}' not found/string in doc ID {source_id}. Skipping.")
             self._total_parse_failures += 1
             return None
+
         parsed_fields = self._grok_instance.match(original_content)
         if parsed_fields:
             target_doc = parsed_fields.copy()
-            # Handle timestamp logic (optional)
+            # ... (timestamp handling, copy fields logic - remains the same) ...
             if 'timestamp' not in target_doc and '@timestamp' in source_doc:
                  target_doc['@original_timestamp'] = source_doc['@timestamp']
             elif 'timestamp' in target_doc and '@timestamp' not in target_doc:
                  target_doc['@timestamp'] = target_doc['timestamp']
-            # Copy fields
             if fields_to_copy:
                 for field in fields_to_copy:
                     if field in source_doc and field not in target_doc:
                         target_doc[field] = source_doc[field]
-            return target_doc
+
+            # Return the original ID along with the parsed doc
+            return source_id, target_doc
         else:
             self._total_parse_failures += 1
             return None
 
-    # _process_batch (Uses self._batch_size_this_run)
+    # Modified _process_batch to store (id, doc) tuples
     def _process_batch(self, hits: List[Dict[str, Any]], state: ScrollGrokParserState) -> bool:
+        """Processes a batch of hits, storing (source_id, parsed_doc) pairs."""
         self._logger.debug(f"Processing batch of {len(hits)} hits...")
         field_to_parse = state['field_to_parse']
         fields_to_copy = state.get('fields_to_copy')
 
         for hit in hits:
-             parsed_doc = self._process_single_hit(hit, field_to_parse, fields_to_copy)
-             if parsed_doc:
-                  self._current_batch.append(parsed_doc)
+             processed_data = self._process_single_hit(hit, field_to_parse, fields_to_copy)
+             if processed_data: # processed_data is now (source_id, parsed_doc)
+                  self._current_batch_data.append(processed_data)
 
-        # Index the accumulated batch if it's large enough (use instance var)
-        if len(self._current_batch) >= self._batch_size_this_run:
+        # Index the accumulated batch if it's large enough
+        if len(self._current_batch_data) >= self._batch_size_this_run:
             self._flush_batch(state['target_index'])
 
         return True # Continue scrolling
 
-    # _flush_batch (remains the same)
+    # Modified _flush_batch to format update/upsert actions and use bulk_operation
     def _flush_batch(self, target_index: str):
-        if not self._current_batch: return
-        self._logger.info(f"Indexing batch of {len(self._current_batch)} parsed documents to '{target_index}'...")
-        success_count, errors = self._db.bulk_index(self._current_batch, target_index)
-        self._total_indexed_successfully += success_count
+        """Formats update/upsert actions and indexes the current batch."""
+        if not self._current_batch_data:
+            return
+
+        self._logger.info(f"Preparing bulk update/upsert batch of {len(self._current_batch_data)} documents for '{target_index}'...")
+
+        bulk_actions = []
+        for source_id, parsed_doc in self._current_batch_data:
+            # Action dictionary for the 'update' operation
+            action = {
+                "update": {
+                    "_index": target_index,
+                    "_id": source_id # Use the source document's ID
+                }
+            }
+            # Data dictionary for the update, specifying the doc and enabling upsert
+            data = {
+                "doc": parsed_doc,
+                "doc_as_upsert": True
+            }
+            # Append both the action and the data line to the list
+            # NOTE: helpers.bulk can sometimes handle this structure automatically,
+            # but explicitly creating the action/data pairs is safer across versions.
+            # Let's try the simpler format first, which helpers.bulk often accepts:
+            simplified_action = {
+                "_op_type": "update", # Explicitly setting op_type
+                "_index": target_index,
+                "_id": source_id,
+                "doc": parsed_doc,
+                "doc_as_upsert": True
+            }
+            bulk_actions.append(simplified_action)
+
+
+        # Use the modified bulk_operation method
+        success_count, errors = self._db.bulk_operation(actions=bulk_actions)
+
+        self._total_indexed_successfully += success_count # Count includes both updates and inserts
         self._total_index_failures += len(errors)
         if errors:
              self._errors_in_batch.extend(errors)
-             self._logger.warning(f"{len(errors)} errors during bulk indexing.")
-        self._current_batch = []
+             self._logger.warning(f"{len(errors)} errors occurred during bulk update/upsert.")
 
-    # run (Sets self._batch_size_this_run and uses state['batch_size'] for DB call)
+        # Clear the processed data batch
+        self._current_batch_data = []
+
+    # run method (Reset the correct batch list)
     def run(self, initial_state: ScrollGrokParserState) -> ScrollGrokParserState:
-        self._batch_size_this_run = initial_state['batch_size'] # <--- Set instance batch size
+        self._batch_size_this_run = initial_state['batch_size']
         self._logger.info(f"Starting ScrollGrokParserAgent run. Source: '{initial_state['source_index']}', Target: '{initial_state['target_index']}', Batch Size: {self._batch_size_this_run}")
         result_state = initial_state.copy()
         result_state["status"] = "running"
-        # ... (Reset internal counters) ...
-        self._current_batch = []
+
+        # Reset internal counters and the correct batch list
+        self._current_batch_data = [] # <--- Reset this list
         self._errors_in_batch = []
         self._total_processed = 0
         self._total_indexed_successfully = 0
         self._total_parse_failures = 0
         self._total_index_failures = 0
-
-
+        # ... (rest of the run method remains the same: initialize grok, scroll, flush final batch, populate results) ...
         if not self._initialize_grok(initial_state['grok_pattern']):
             result_state["status"] = "failed"; result_state["error_count"] = 1
             return result_state
 
-        source_query = initial_state.get("source_query") or {"query": {"match_all": {}}} # Ensure query is wrapped correctly
+        source_query = initial_state.get("source_query") or {"query": {"match_all": {}}}
         fields_needed = set([initial_state['field_to_parse']])
         if initial_state.get('fields_to_copy'): fields_needed.update(initial_state['fields_to_copy'])
         if '@timestamp' not in fields_needed: fields_needed.add('@timestamp')
@@ -256,7 +305,7 @@ class ScrollGrokParserAgent:
             processed_count, _ = self._db.scroll_and_process_batches(
                 index=initial_state['source_index'],
                 query=source_query,
-                batch_size=initial_state['batch_size'], # <--- Pass batch size to DB method
+                batch_size=initial_state['batch_size'],
                 process_batch_func=batch_processor,
                 source_fields=source_fields_list
             )
