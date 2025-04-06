@@ -217,7 +217,7 @@ def register_es_parse_parser(subparsers):
     es_parse_parser.add_argument(
         '-b', '--batch-size',
         type=int,
-        default=5000,
+        default=500,
         help='Number of documents to process/index per batch (default: 5000).'
     )
     es_parse_parser.add_argument(
