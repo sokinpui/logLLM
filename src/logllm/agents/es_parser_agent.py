@@ -497,13 +497,37 @@ class SingleGroupParserAgent:
         # If pattern generation failed and fallback failed, status is 'failed_fallback'
 
         # Simplify final status for overall reporting?
-        final_status = result_state["parsing_status"]
-        if final_status in ["completed", "completed_fallback"]:
-             final_log_status = "SUCCESS"
+        final_parsing_result = result_state.get("parsing_result")
+        if final_parsing_result:
+            last_run_status = final_parsing_result.get("status", "failed") # Get status of the last attempt
+            if last_run_status == "completed":
+                # If the last run completed, was it the initial or fallback?
+                if result_state.get("fallback_used"):
+                    result_state["parsing_status"] = "completed_fallback"
+                else:
+                    result_state["parsing_status"] = "completed"
+            else: # Last run failed
+                if result_state.get("fallback_used"):
+                    result_state["parsing_status"] = "failed_fallback"
+                else:
+                    # If initial failed and no fallback was triggered (e.g., pattern error), mark as failed
+                    result_state["parsing_status"] = "failed"
+        else:
+            # If no parsing result exists at all (e.g., index determination failed)
+            # The status should already be "failed" from earlier checks.
+            # Ensure it defaults to failed if somehow missed.
+            if "parsing_status" not in result_state or result_state["parsing_status"] == "running":
+                 result_state["parsing_status"] = "failed"
+
+
+        # Simplify final status for overall reporting (Used for logging/display)
+        final_status_for_display = result_state["parsing_status"]
+        if final_status_for_display in ["completed", "completed_fallback"]:
+             final_log_status = "SUCCESS" if final_parsing_result and final_parsing_result.get("error_count", 1) == 0 else "COMPLETED_WITH_ERRORS"
         else:
              final_log_status = "FAILURE"
 
-        self._logger.info(f"Finished SingleGroupParserAgent run for group '{group_name}'. Final Status: {final_status} ({final_log_status})")
+        self._logger.info(f"Finished SingleGroupParserAgent run for group '{group_name}'. Final Status: {final_status_for_display} ({final_log_status})")
         return result_state
 
 
