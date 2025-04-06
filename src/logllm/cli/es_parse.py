@@ -1,12 +1,11 @@
-# src/logllm/cli/es_parse.py (New File)
+# src/logllm/cli/es_parse.py
 
 import argparse
 import sys
 import multiprocessing
 
 try:
-    # Import the new top-level agent
-    from ..agents.es_parser_agent import AllGroupsParserAgent
+    from ..agents.es_parser_agent import AllGroupsParserAgent, AllGroupsParserState # Added State import
     from ..utils.llm_model import GeminiModel
     from ..utils.database import ElasticsearchDatabase
     from ..utils.logger import Logger
@@ -21,13 +20,22 @@ logger = Logger()
 def handle_es_parse(args):
     """Handles the logic for the 'es-parse' command."""
     num_threads = args.threads
+    batch_size = args.batch_size # Get batch size from args
+    sample_size = args.sample_size # Get sample size from args
 
     if num_threads < 1:
         logger.warning(f"Invalid thread count ({num_threads}) specified. Defaulting to 1.")
         num_threads = 1
+    if batch_size < 1:
+        logger.warning(f"Invalid batch size ({batch_size}) specified. Defaulting to 5000.")
+        batch_size = 5000 # Use default if invalid
+    if sample_size < 1:
+        logger.warning(f"Invalid sample size ({sample_size}) specified. Defaulting to 20.")
+        sample_size = 20 # Use default if invalid
 
-    logger.info(f"Executing Elasticsearch parse command. Threads: {num_threads}")
-    print(f"Starting Elasticsearch log parsing using {num_threads} worker(s)...")
+
+    logger.info(f"Executing Elasticsearch parse command. Threads: {num_threads}, Batch Size: {batch_size}, Sample Size: {sample_size}")
+    print(f"Starting Elasticsearch log parsing. Workers: {num_threads}, Batch Size: {batch_size}, Sample Size: {sample_size}")
 
     try:
         # --- Initialize Dependencies ---
@@ -38,30 +46,33 @@ def handle_es_parse(args):
              print("Error: Could not connect to Elasticsearch.")
              return
 
-        # Model needed for SingleGroupParserAgent (called by AllGroupsParserAgent)
         model = GeminiModel()
-        # Prompts manager needed for pattern generation
-        # Ensure the path logic here is robust or uses args.json/args.test from main CLI entry
         json_file = getattr(args, 'json', None) or ("prompts/test.json" if getattr(args, 'test', False) else "prompts/prompts.json")
         prompts_manager = PromptsManager(json_file=json_file)
 
         # --- Initialize Top-Level Agent ---
         agent = AllGroupsParserAgent(model=model, db=db, prompts_manager=prompts_manager)
 
-        # --- Prepare Initial State ---
-        initial_state = {
+        # --- Prepare Initial State (No changes needed here for sizes) ---
+        initial_state: AllGroupsParserState = { # Specify type hint
             "group_info_index": cfg.INDEX_GROUP_INFOS,
-            "field_to_parse": args.field, # Get field from args
-            "fields_to_copy": args.copy_fields, # Get fields to copy from args
+            "field_to_parse": args.field,
+            "fields_to_copy": args.copy_fields,
             "group_results": {},
             "status": "pending"
         }
 
-        # --- Run the Agent ---
-        final_state = agent.run(initial_state, num_threads=num_threads)
+        # --- Run the Agent, passing the sizes ---
+        final_state = agent.run(
+            initial_state=initial_state,
+            num_threads=num_threads,
+            batch_size=batch_size, # Pass batch size
+            sample_size=sample_size # Pass sample size
+        )
 
-        # --- Display Summary ---
+        # --- Display Summary (No changes needed here) ---
         print("\n--- Elasticsearch Parsing Summary ---")
+        # ... (rest of summary display logic remains the same) ...
         if final_state["status"] == "completed":
             total_groups = len(final_state.get("group_results", {}))
             successful_groups = 0
@@ -98,6 +109,7 @@ def handle_es_parse(args):
             print("Overall Status: FAILED")
             print("Check logs for detailed errors during orchestration or group processing.")
 
+
         logger.info("Elasticsearch parsing finished.")
 
     except Exception as e:
@@ -112,23 +124,39 @@ def register_es_parse_parser(subparsers):
     es_parse_parser = subparsers.add_parser(
         'es-parse',
         help='Parse logs stored in Elasticsearch indices using Grok and index results',
-        description="Retrieves logs from source indices (grouped by info in INDEX_GROUP_INFOS), generates Grok patterns via LLM, parses logs, and indexes structured results into target indices (e.g., parsed_log_*)."
+        description="Retrieves logs from source indices, generates Grok patterns via LLM, parses logs, and indexes structured results into target indices."
     )
 
     es_parse_parser.add_argument(
         '-f', '--field',
         type=str,
-        default='content', # Sensible default
+        default='content',
         help='The field in the source documents containing the raw log line to parse (default: content).'
     )
     es_parse_parser.add_argument(
         '--copy-fields',
         type=str,
-        nargs='*', # 0 or more fields
-        help='(Optional) List of additional fields from the source document to copy to the target parsed document (e.g., --copy-fields host.name agent.id).'
+        nargs='*',
+        help='(Optional) List of additional fields from the source document to copy to the target parsed document.'
     )
 
-    # --- Threads Argument ---
+    # --- NEW Argument: Batch Size ---
+    es_parse_parser.add_argument(
+        '-b', '--batch-size',
+        type=int,
+        default=5000, # Default value
+        help='Number of documents to process/index per batch during Elasticsearch scroll/bulk operations (default: 5000).'
+    )
+
+    # --- NEW Argument: Sample Size ---
+    es_parse_parser.add_argument(
+        '-s', '--sample-size',
+        type=int,
+        default=20, # Default value
+        help='Number of log lines to sample from each group for LLM Grok pattern generation (default: 20).'
+    )
+
+    # --- Threads Argument (Remains the same) ---
     default_threads = 1
     try:
         max_threads = multiprocessing.cpu_count()
@@ -139,8 +167,8 @@ def register_es_parse_parser(subparsers):
 
     es_parse_parser.add_argument(
         '-t', '--threads', type=int, default=default_threads,
-        help=f'Number of parallel processes for parsing GROUPS (each worker handles one group). Default: {default_threads}. {max_help}'
+        help=f'Number of parallel processes for parsing GROUPS. Default: {default_threads}. {max_help}'
     )
 
-    # Set the function to be called when 'es-parse' is chosen
+    # Set the function to be called
     es_parse_parser.set_defaults(func=handle_es_parse)
