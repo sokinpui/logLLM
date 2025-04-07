@@ -1,187 +1,173 @@
 # Project logLLM
 
-**logLLM** is a multi-agent system designed to process and analyze log data using a collaborative agent-based workflow. This repository provides a modular framework integrating various agents, a central orchestration layer, and utility tools to streamline development and deployment.
+**logLLM** is a command-line tool and library designed to process, parse, and analyze log data using Large Language Models (LLMs) and traditional parsing techniques. It provides a modular framework integrating various utilities and agents, managed through a central Command Line Interface (CLI).
 
 ## Table of Contents
 - [Overview](#overview)
 - [Installation](#installation)
-- [Usage](#usage)
-  - [Running the Main Workflow](#running-the-main-workflow)
-  - [Managing Prompts with PromptsManager](#managing-prompts-with-promptsmanager)
+- [Usage (CLI)](#usage-cli)
+  - [Database Management (`db`)](#database-management-db)
+  - [Log Collection (`collect`)](#log-collection-collect)
+  - [File-based Parsing (`parse`)](#file-based-parsing-parse)
+  - [Elasticsearch-based Parsing (`es-parse`)](#elasticsearch-based-parsing-es-parse)
+  - [Prompt Management (`pm`)](#prompt-management-pm)
+- [Project Structure](#project-structure)
 - [Documentation](#documentation)
 - [Contributing](#contributing)
 - [License](#license)
 
 ## Overview
-This project leverages a multi-agent architecture orchestrated by `graph.py`, supported by configuration management, utility functions, and a robust prompt management system. Key components include:
+This project leverages a CLI built with `argparse` to manage different functionalities:
 
-- **Agents**: Specialized modules for specific tasks (see [agents.md](./doc/agents.md)).
-- **Graph**: The main entry point integrating agents into a unified workflow (see [graph.md](./doc/graph.md)).
-- **Configurations**: Centralized settings for logging, Docker, and databases (see [configurations.md](./doc/configurable.md)).
-- **Utilities**: Helper classes and functions for core functionality (see [utils.md](./doc/utils.md)).
-- **Prompt Manager**: A tool to generate, store, manage, and version-control prompts in a JSON file (default: `prompts/prompts.json`, customizable via `-j/--json`), designed for broad use across the project with Git-based version tracking (see [prompt_manager.md](./doc/prompts_manager.md)).
+- **Database Containers**: Start, stop, and manage Elasticsearch & Kibana Docker containers (`db` command).
+- **Log Collection**: Collect log files from directories and ingest them into Elasticsearch (`collect` command).
+- **Log Parsing (File-based)**: Parse local log files using Grok patterns (potentially LLM-generated) and output structured data to CSV files (`parse` command).
+- **Log Parsing (Elasticsearch-based)**: Parse raw logs already stored in Elasticsearch, generate/validate Grok patterns using LLMs, handle retries, and index structured results (or fallback data) into separate Elasticsearch indices (`es-parse` command).
+- **Prompt Management**: A tool (`pm` command) using `PromptsManager` to generate, store, manage, and version-control LLM prompts in a JSON file (default: `prompts/prompts.json`), integrated with Git for version tracking.
+- **Core Utilities**: Helper classes for database interaction, logging, data structures, LLM interaction, container management, etc. (see [utils.md](./doc/utils.md)).
+- **Agents**: Underlying logic for parsing and analysis, often using `langgraph` for workflow definition (see [agents.md](./doc/agents.md)).
+- **Configurations**: Centralized settings (`config.py`) for logging, Docker, databases, index naming, and LLM models (see [configurations.md](./doc/configurable.md)).
 
 ## Installation
-1. **Clone the Repository**:
-   ```bash
-   git clone https://github.com/yourusername/logLLM.git
-   cd logLLM
-   ```
+1.  **Clone the Repository**:
+    ```bash
+    git clone https://github.com/yourusername/logLLM.git # Replace with your repo URL
+    cd logLLM
+    ```
 
-2. **Set Up a Virtual Environment** (optional but recommended):
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
+2.  **Set Up a Virtual Environment** (optional but recommended):
+    ```bash
+    python -m venv venv
+    source venv/bin/activate  # On Windows: venv\Scripts\activate
+    ```
 
-3. **Install Dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-   *Note*: `prompts_manager.py` requires only standard Python libraries (`os`, `ast`, `json`, `argparse`, `re`, `inspect`, `subprocess`, `datetime`, and `typing`) but needs `git` installed and accessible in the system PATH for version control features.
+3.  **Install Dependencies**:
+    ```bash
+    pip install -r requirement.txt
+    ```
+    *Note*: The prompt management (`pm`) command requires `git` installed and accessible in the system PATH for version control features. Docker (or Colima on macOS) is required for the `db` command.
 
-4. **Project Structure**:
-   ```
-   logLLM/
-   ├── agents/            # Agent implementations
-   ├── prompts/           # Stores prompts.json and test.json (Git-managed)
-   ├── utils/             # Utility modules, including prompts_manager.py
-   ├── graph.py           # Main workflow orchestration
-   ├── config.py          # Configuration settings
-   ├── requirements.txt   # Project dependencies
-   └── README.md          # This file
-   ```
+4.  **Set Environment Variables**:
+    *   Ensure `GENAI_API_KEY` is set in your environment if using the Gemini model.
+    *   Check `src/logllm/config/config.py` for other potential configuration needs.
 
-## Usage
+## Usage (CLI)
+The main entry point is `src/logllm/__main__.py`. Run commands using `python -m src.logllm <command> [options]`.
 
-### Running the Main Workflow
-To execute the core multi-agent system:
+**Global Options:**
+*   `--verbose`: Enable detailed logging output globally.
+*   `--test`: Use `prompts/test.json` for prompt-related commands (`pm`, `parse`, `es-parse`). Overridden by `--json`.
+*   `-j, --json PATH`: Specify a custom JSON file path for prompts. Overrides `--test`.
+
+### Database Management (`db`)
+Manage Elasticsearch and Kibana containers.
 ```bash
-python graph.py
+# Start containers (specify memory for Colima VM if needed)
+python -m src.logllm db start [-m <GB>]
+
+# Check container status
+python -m src.logllm db status
+
+# Stop containers
+python -m src.logllm db stop [--remove] [--stop-colima]
+
+# Restart containers
+python -m src.logllm db restart [-m <GB>]
 ```
-See [graph.md](./doc/graph.md) for details.
+See `python -m src.logllm db --help` for more details.
 
-### Managing Prompts with PromptsManager
-The `PromptsManager` (in `utils/prompts_manager.py`) manages prompts in a JSON file (default: `prompts/prompts.json`, customizable with `-j/--json` or `--test`). It provides a public API for use across agents, scripts, and workflows, with Git-based version control to track changes, list version history, revert to previous states, and compare differences between commits.
-
-#### Why Use PromptsManager?
-- **Dynamic Prompts**: Retrieve prompts at runtime with `get_prompt`.
-- **Centralized Management**: Store and manage prompts in one JSON file.
-- **Programmatic Control**: Use `list_prompts`, `add_prompt`, `delete_keys`, `list_versions`, and `revert_version` in your code.
-- **Version Control**: Track and revert prompt changes using Git.
-
-#### Quick Start
-1. **Initialize the Prompt Store**:
-   ```bash
-   mkdir -p custom && python utils/prompts_manager.py scan -d agents/ -r -j custom/prompts.json
-   ```
-   *Note*: This initializes a Git repository in `custom/` if not already present.
-
-2. **List Keys**:
-   ```bash
-   python utils/prompts_manager.py list --prompt -j custom/prompts.json
-   ```
-
-3. **Add a Prompt**:
-   ```bash
-   python utils/prompts_manager.py add -k agents.module.AgentClass.method -v "Process {data}" -j custom/prompts.json
-   ```
-   *Note*: Changes are automatically committed to the Git repository in `custom/`.
-
-4. **View Version History**:
-   ```bash
-   python utils/prompts_manager.py version -k agents.module.AgentClass.method --verbose -1 -j custom/prompts.json
-   ```
-   **Output**:
-   ```
-   Version history for 'agents.module.AgentClass.method' in custom/prompts.json:
-     - 2025-03-18T10:00:00 | abc12345 | Update prompts.json at 2025-03-18T10:00:00 | Prompt: Process {data}
-   ```
-
-5. **Revert a Prompt**:
-   ```bash
-   python utils/prompts_manager.py revert -c abc12345 -k agents.module.AgentClass.method --verbose -1 -j custom/prompts.json
-   ```
-   **Output**:
-   ```
-   Reverted 'agents.module.AgentClass.method' to version from commit abc12345: 'Process {data}'
-   Current custom/prompts.json content:
-   {...}
-   ```
-
-6. **Use in Code**:
-   ```python
-   from utils.prompts_manager import PromptsManager
-
-   class AgentClass:
-       def __init__(self):
-           json_path = "custom/prompts.json" if custom else "prompts/prompts.json"
-           self.pm = PromptsManager(json_file=json_path)
-
-       def method(self, data):
-           # List prompts and versions
-           prompts = self.pm.list_prompts(only_prompts=True)
-           history = self.pm.list_versions("agents.module.AgentClass.method", verbose=-1)
-           print("Prompts:", prompts)
-           print("History:", history)
-           return self.pm.get_prompt(data=data)
-
-   custom = True  # Toggle for custom file
-   agent = AgentClass()
-   print(agent.method("log data"))  # "Process log data"
-   ```
-
-7. **Delete Keys**:
-   ```bash
-   python utils/prompts_manager.py delete -k agents.module.AgentClass.method -j custom/prompts.json
-   ```
-
-#### CLI Commands
-- **Scan**: `python utils/prompts_manager.py scan -d <DIR> [-r] [--hard] [--verbose] [-j PATH] [--test]`
-  - Scans a directory, updates the prompt store, and commits changes to Git.
-- **List**: `python utils/prompts_manager.py list [--prompt] [--verbose] [-j PATH] [--test]`
-  - Lists keys in the prompt store.
-- **Add**: `python utils/prompts_manager.py add -k <KEY> -v <VALUE> [--verbose] [-j PATH] [--test]`
-  - Adds/updates a prompt and commits to Git.
-- **Delete**: `python utils/prompts_manager.py delete -k <KEY1> <KEY2> ... [--verbose] [-j PATH] [--test]`
-  - Deletes keys and commits to Git.
-- **Version**: `python utils/prompts_manager.py version [-k <KEY>] [--verbose [N]] [-j PATH] [--test]`
-  - Lists Git commit history for the file or a key. `--verbose N` shows the first `N` characters of prompts (default: 50; -1 for full).
-- **Revert**: `python utils/prompts_manager.py revert -c <HASH> [-k <KEY>] [--verbose [N]] [-j PATH] [--test]`
-  - Reverts the file or a key to a commit and commits the revert. `--verbose N` shows the first `N` characters of the reverted prompt (default: 50; -1 for full; non-default also prints full JSON).
-
-#### Customizing with `-j/--json`
-Specify a custom JSON file path with `-j/--json` (directory must exist; initialized as a Git repository if not already):
+### Log Collection (`collect`)
+Collect logs from a directory into Elasticsearch. Requires a running DB.
 ```bash
-mkdir -p custom && python utils/prompts_manager.py scan -d agents/ -j custom/prompts.json --verbose
+# Collect logs from ./logs directory
+python -m src.logllm collect -d ./logs
 ```
+See `python -m src.logllm collect --help`.
 
-#### Testing with `--test`
-Use `--test` for `prompts/test.json` (overridden by `-j/--json`):
+### File-based Parsing (`parse`)
+Parse local log files into CSV using Grok. Requires logs to be collected first if using directory mode (`-d`).
 ```bash
-python utils/prompts_manager.py scan -d agents/ --test
+# Parse logs for groups defined in DB, based on original log directory
+# Uses parallel workers by default if -t > 1
+python -m src.logllm parse -d ./logs [-t <threads>] [--show-progress]
+
+# Parse a single file (LLM generates pattern if --grok-pattern omitted)
+python -m src.logllm parse -f ./logs/ssh/SSH.log [--grok-pattern "<GROK_STRING>"]
 ```
+See `python -m src.logllm parse --help`.
 
-#### Version Control Notes
-- The directory containing the JSON file (e.g., `prompts/` or `custom/`) is managed as a separate Git repository.
-- To avoid tracking it in the parent `logLLM` repo, add it to `.gitignore`:
-  ```
-  prompts/
-  custom/
-  ```
-- Alternatively, integrate it as a Git submodule:
-  ```bash
-  git submodule add <url> prompts
-  ```
+### Elasticsearch-based Parsing (`es-parse`)
+Parse raw logs stored in Elasticsearch, indexing results back into ES. Requires a running DB and collected logs.
+```bash
+# Parse all log groups found in Elasticsearch (parallel workers)
+python -m src.logllm es-parse [-t <threads>] [-b <batch_size>] [-s <gen_sample>] \
+                              [--validation-sample-size <val_sample>] \
+                              [--validation-threshold <rate>] [--max-retries <num>] \
+                              [--copy-fields <field1> <field2>] [--keep-unparsed]
 
-See [prompt_manager.md](./doc/prompts_manager.md) for full details.
+# Parse only a specific group
+python -m src.logllm es-parse -g <group_name> [options...]
+```
+See `python -m src.logllm es-parse --help`.
+
+### Prompt Management (`pm`)
+Manage LLM prompts stored in `prompts.json` (or custom path via global `-j/--json` or `--test`).
+```bash
+# Scan code directory to update prompt structure (recursive)
+python -m src.logllm pm scan -d src/logllm/agents -r [-m "Commit message"]
+
+# List all keys
+python -m src.logllm pm list
+
+# List only keys with actual prompts
+python -m src.logllm pm list --prompt
+
+# Add or update a prompt for a key (use -f for file input)
+python -m src.logllm pm add -k src.logllm.agents.parser_agent.SimpleGrokLogParserAgent._generate_grok_pattern -v "New prompt {sample_logs}"
+
+# Remove a key
+python -m src.logllm pm rm -k src.logllm.agents.parser_agent.SimpleGrokLogParserAgent._generate_grok_pattern
+
+# View version history for a key
+python -m src.logllm pm version -k <key_path> [--verbose-hist -1] [--tail 5]
+
+# Revert a key (or entire file if -k omitted) to a specific commit
+python -m src.logllm pm revert -c <commit_hash> [-k <key_path>]
+
+# Show differences between two commits for a key (or entire file)
+python -m src.logllm pm diff -c1 <commit1> -c2 <commit2> [-k <key_path>]
+```
+See `python -m src.logllm pm --help` and [prompt_manager.md](./doc/prompts_manager.md) for full details.
+
+## Project Structure
+```
+logLLM/
+├── doc/                 # Documentation files
+├── logs/                # Example log files (Input for `collect`, `parse`)
+├── models/              # Local LLM model files (e.g., GGUF for llama-cpp)
+├── prompts/             # Default prompt store (prompts.json, test.json - Git-managed)
+│   └── .git/            # Separate Git repo for prompt versioning
+├── src/
+│   └── logllm/
+│       ├── __init__.py
+│       ├── __main__.py      # Main CLI entry point
+│       ├── agents/          # Agent implementations (parsing, analysis)
+│       ├── cli/             # CLI command handlers (db, collect, parse, es-parse, pm)
+│       ├── config/          # Configuration (config.py)
+│       └── utils/           # Utility modules (database, logger, prompts_manager, etc.)
+├── .gitignore
+├── pyproject.toml       # Project metadata and build config
+├── requirement.txt      # Python dependencies
+├── README.md            # This file
+└── movelook.log         # Default log output file
+```
 
 ## Documentation
 - **[agents.md](./doc/agents.md)**: Agent details.
-- **[graph.md](./doc/graph.md)**: Workflow overview.
-- **[configurations.md](./doc/configurable.md)**: Config settings.
-- **[utils.md](./doc/utils.md)**: Utility documentation.
-- **[prompt_manager.md](./doc/prompts_manager.md)**: Prompt management guide, including version control.
+- **[configurations.md](./doc/configurable.md)**: Config settings (`config.py`).
+- **[utils.md](./doc/utils.md)**: Utility module documentation.
+- **[prompt_manager.md](./doc/prompts_manager.md)**: Detailed guide for the `pm` command and `PromptsManager` class.
+- **[overview.md](./doc/overview.md)**: High-level overview of agent interaction (Note: Orchestration is now mainly via CLI dispatch).
 
 ## Contributing
 Contributions are welcome! Please:
@@ -193,3 +179,5 @@ Contributions are welcome! Please:
 
 ## License
 [MIT License](./LICENSE) - feel free to use, modify, and distribute this project.
+
+
