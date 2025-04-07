@@ -189,8 +189,8 @@ def handle_container_restart(args):
 # --- Register Parser Function (Modified as per previous answer with --stop-colima) ---
 def register_container_parser(subparsers):
     container_parser = subparsers.add_parser(
-        'container',
-        help='Manage Docker containers (Elasticsearch, Kibana) via Colima/Docker',
+        'db',
+        help='Manage database engine in Docker containers (Elasticsearch, Kibana) via Colima(MacOS)/Docker(Linux) daemon',
         description='Start, stop, restart, or check the status of the necessary Docker containers.'
         )
     container_subparsers = container_parser.add_subparsers(
