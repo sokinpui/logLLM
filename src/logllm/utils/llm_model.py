@@ -147,7 +147,6 @@ class GeminiModel(LLMModel):
     """
     def __init__(self, model_name : str | None = None):
         super().__init__()
-        self.context_size = 1000000 # Example context size
         if model_name:
             self.model_name = model_name
         else:
@@ -170,7 +169,7 @@ class GeminiModel(LLMModel):
 
         try:
             genai.configure(api_key=api_key)
-            self.generation_config = genai.GenerationConfig(temperature=0.0)
+            self.generation_config = genai.GenerationConfig(temperature=1.0)
             self.safety_settings = {} # Configure as needed
 
             self.model = genai.GenerativeModel(

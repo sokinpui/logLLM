@@ -114,6 +114,14 @@ def get_parsed_log_storage_index(group: str) -> str:
     clean_group = group.replace(" ", "_").replace("/", "_").replace(".", "_").lower()
     return f"parsed_log_{clean_group}"
 
+def get_unparsed_log_storage_index(group: str) -> str:
+    """
+    Generates an Elasticsearch index name for storing logs that failed parsing
+    or were processed by fallback for a specific group.
+    """
+    clean_group = group.replace(" ", "_").replace("/", "_").replace(".", "_").lower()
+    return f"unparsed_log_{clean_group}"
+
 # Maximum Memory context sie for analyze agent to store summary
 MEMRORY_TOKENS_LIMIT = 20000
 # ==========================

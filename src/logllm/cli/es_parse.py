@@ -93,36 +93,43 @@ def handle_es_parse(args):
             # --- Display Summary (Single Group - using new state) ---
             print("\n--- Elasticsearch Parsing Summary (Single Group) ---")
             status = final_group_state.get("final_parsing_status", "unknown")
-            parse_result_details = final_group_state.get("final_parsing_results") # Dict from ScrollGrokParserAgent or None
+            # Use the summary dictionary now
+            results_summary = final_group_state.get("final_parsing_results_summary")
             error_msgs = final_group_state.get("error_messages", [])
 
-            # Determine pattern used
-            pattern_used = final_group_state.get("current_grok_pattern", "N/A") # Pattern from last step
+            pattern_used = final_group_state.get("current_grok_pattern", "N/A")
             if status == "success_fallback": pattern_used = "Fallback: " + SingleGroupParserAgent.FALLBACK_PATTERN
             elif status == "failed_fallback": pattern_used = "Fallback FAILED"
-            elif status == "failed (worker critical error)" or status == "failed (agent error)": pattern_used = "Failed before/during parsing"
+            elif "failed" in status: pattern_used = "Failed before/during parsing"
             elif not pattern_used or pattern_used == "N/A": pattern_used = "Pattern Generation/Validation Failed"
 
+            # Extract counts from the summary dict
+            processed = results_summary.get("processed", 0) if results_summary else 0
+            indexed_ok = results_summary.get("successful", 0) if results_summary else 0
+            indexed_failed_fallback = results_summary.get("failed", 0) if results_summary else 0 # Docs sent to failed index
+            parse_errors = results_summary.get("parse_errors", 0) if results_summary else 0 # Grok mismatches
+            index_errors = results_summary.get("index_errors", 0) if results_summary else 0 # Bulk API errors
 
-            processed = parse_result_details.get("processed_count", 0) if parse_result_details else 0
-            indexed = parse_result_details.get("indexed_count", 0) if parse_result_details else 0
-            parse_errors = parse_result_details.get("parse_error_count", 0) if parse_result_details else 0
-            index_errors = parse_result_details.get("index_error_count", 0) if parse_result_details else 0
-            total_errors = parse_errors + index_errors
+            target_idx_name = cfg.get_parsed_log_storage_index(target_group)
+            failed_idx_name = cfg.get_unparsed_log_storage_index(target_group)
 
             print(f"\nGroup '{target_group}':")
             print(f"  Status: {status}")
             print(f"  Pattern Detail: {pattern_used}")
-            print(f"  Docs Scanned: {processed}, Indexed: {indexed}, Parse Errors: {parse_errors}, Index Errors: {index_errors}")
+            print(f"  Docs Scanned: {processed}")
+            print(f"  Indexed Successfully (-> {os.path.basename(target_idx_name)}): {indexed_ok}")
+            print(f"  Failed/Fallback (-> {os.path.basename(failed_idx_name)}): {indexed_failed_fallback}")
+            print(f"  Grok Parse Errors (within run): {parse_errors}")
+            print(f"  Bulk Indexing Errors: {index_errors}")
 
             if error_msgs:
-                print("  Agent Errors:")
-                for i, msg in enumerate(error_msgs[:5]): print(f"    - {msg}") # Show first few
+                print("  Agent Errors/Warnings:")
+                for i, msg in enumerate(error_msgs[:5]): print(f"    - {msg}")
                 if len(error_msgs) > 5: print("    ...")
 
-            if status in ["success", "success_fallback"]:
-                 if total_errors == 0 and not error_msgs: print("\nResult: SUCCESS")
-                 else: print("\nResult: COMPLETED WITH ERRORS")
+            if status in ["success", "success_with_errors", "success_fallback"]:
+                 if parse_errors == 0 and index_errors == 0 and not error_msgs: print("\nResult: SUCCESSFUL (details above)")
+                 else: print("\nResult: COMPLETED WITH ERRORS/FAILURES (details above)")
             else:
                  print("\nResult: FAILED")
 
@@ -159,70 +166,74 @@ def handle_es_parse(args):
             if final_orchestrator_state["status"] == "completed":
                 group_results_dict = final_orchestrator_state.get("group_results", {})
                 total_groups = len(group_results_dict)
-                success_count = 0
-                fallback_count = 0
-                error_failure_count = 0
+                success_count = 0           # Status = "success"
+                success_errors_count = 0    # Status = "success_with_errors"
+                fallback_count = 0          # Status = "success_fallback"
+                failed_count = 0            # Status contains "failed"
+
                 total_processed_all = 0
-                total_indexed_all = 0
+                total_indexed_ok_all = 0
+                total_indexed_failed_fallback_all = 0
                 total_parse_errors_all = 0
                 total_index_errors_all = 0
 
                 print(f"Processed {total_groups} groups.")
 
-                # Iterate through the results dictionary (key=group_name, value=SingleGroupParseGraphState)
                 for group_name, group_final_state in group_results_dict.items():
                      status = group_final_state.get("final_parsing_status", "unknown")
-                     parse_result_details = group_final_state.get("final_parsing_results")
+                     results_summary = group_final_state.get("final_parsing_results_summary")
                      error_msgs = group_final_state.get("error_messages", [])
 
-                     # Determine pattern used (similar logic as single group summary)
-                     pattern_used = group_final_state.get("current_grok_pattern", "N/A")
-                     last_failed = group_final_state.get("last_failed_pattern")
-                     fallback_used = "fallback" in status
+                     pattern_used = group_final_state.get("current_grok_pattern", "N/A") # Last attempted/used
+                     if status == "success_fallback": pattern_used = "Fallback: " + SingleGroupParserAgent.FALLBACK_PATTERN
+                     elif "failed" in status: pattern_used = f"Failed (see logs)"
+                     elif not pattern_used: pattern_used = "N/A (Generation/Validation Failed)"
 
-                     display_pattern = "N/A"
-                     if status == "success": display_pattern = pattern_used
-                     elif status == "success_with_errors": display_pattern = f"{pattern_used} (with errors)"
-                     elif status == "success_fallback": display_pattern = "Fallback: " + SingleGroupParserAgent.FALLBACK_PATTERN
-                     elif status == "failed_fallback": display_pattern = "Fallback FAILED"
-                     elif last_failed : display_pattern = f"Failed after retries (last attempt: {last_failed})"
-                     else: display_pattern = "Pattern Generation/Validation Failed"
+                     processed = results_summary.get("processed", 0) if results_summary else 0
+                     indexed_ok = results_summary.get("successful", 0) if results_summary else 0
+                     indexed_failed_fallback = results_summary.get("failed", 0) if results_summary else 0
+                     parse_errors = results_summary.get("parse_errors", 0) if results_summary else 0
+                     index_errors = results_summary.get("index_errors", 0) if results_summary else 0
 
-
-                     processed = parse_result_details.get("processed_count", 0) if parse_result_details else 0
-                     indexed = parse_result_details.get("indexed_count", 0) if parse_result_details else 0
-                     parse_errors = parse_result_details.get("parse_error_count", 0) if parse_result_details else 0
-                     index_errors = parse_result_details.get("index_error_count", 0) if parse_result_details else 0
+                     target_idx_name = cfg.get_parsed_log_storage_index(group_name)
+                     failed_idx_name = cfg.get_unparsed_log_storage_index(group_name)
 
                      print(f"\nGroup '{group_name}':")
                      print(f"  Status: {status}")
-                     print(f"  Pattern Detail: {display_pattern}")
-                     print(f"  Docs Scanned: {processed}, Indexed: {indexed}, Parse Errors: {parse_errors}, Index Errors: {index_errors}")
-                     if error_msgs:
-                          print(f"  Agent Errors: {len(error_msgs)} (See logs for details)")
+                     print(f"  Pattern Detail: {pattern_used}")
+                     print(f"  Docs Scanned: {processed}")
+                     print(f"  Indexed Successfully (-> {os.path.basename(target_idx_name)}): {indexed_ok}")
+                     print(f"  Failed/Fallback (-> {os.path.basename(failed_idx_name)}): {indexed_failed_fallback}")
+                     print(f"  Grok Parse Errors: {parse_errors}, Bulk Index Errors: {index_errors}")
+                     if error_msgs: print(f"  Agent Errors/Warnings: {len(error_msgs)} (See logs)")
 
-
-                     # Update overall counters
+                     # Update overall counters based on status
                      if status == "success": success_count += 1
+                     elif status == "success_with_errors": success_errors_count += 1
                      elif status == "success_fallback": fallback_count += 1
-                     else: error_failure_count += 1 # Count errors/failures together
+                     else: failed_count += 1 # Count all failure types together
 
                      total_processed_all += processed
-                     total_indexed_all += indexed
+                     total_indexed_ok_all += indexed_ok
+                     total_indexed_failed_fallback_all += indexed_failed_fallback
                      total_parse_errors_all += parse_errors
                      total_index_errors_all += index_errors
 
                 print("\n--- Overall ---")
                 print(f"Total Groups Processed: {total_groups}")
-                print(f"  Success (Generated Pattern): {success_count}")
+                print(f"  Success (Clean): {success_count}")
+                print(f"  Success (with Errors/Parse Failures): {success_errors_count}")
                 print(f"  Success (Fallback Pattern): {fallback_count}")
-                print(f"  Completed with Errors / Failed: {error_failure_count}")
-                print(f"Total Documents Scanned (across all groups): {total_processed_all}")
-                print(f"Total Documents Successfully Indexed: {total_indexed_all}")
-                print(f"Total Parse Errors: {total_parse_errors_all}, Total Index Errors: {total_index_errors_all}")
+                print(f"  Failed: {failed_count}")
+                print("-" * 20)
+                print(f"Total Documents Scanned: {total_processed_all}")
+                print(f"Total Successfully Indexed (Target Indices): {total_indexed_ok_all}")
+                print(f"Total Failed/Fallback Indexed (Failed Indices): {total_indexed_failed_fallback_all}")
+                print(f"Total Grok Parse Errors: {total_parse_errors_all}")
+                print(f"Total Bulk Indexing Errors: {total_index_errors_all}")
 
-            else: # Orchestrator status was not 'completed'
-                print("Overall Status: FAILED (Orchestration Error)")
+            else: # Orchestrator status not 'completed'
+                print(f"Overall Status: FAILED ({final_orchestrator_state.get('status', 'unknown')})")
                 print("Check logs for detailed errors during orchestration.")
 
             logger.info("All groups parsing finished.")
