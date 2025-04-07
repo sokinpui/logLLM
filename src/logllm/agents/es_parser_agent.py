@@ -60,6 +60,7 @@ class SingleGroupParseGraphState(TypedDict):
     validation_threshold: float
     batch_size: int
     max_regeneration_attempts: int
+    keep_unparsed_index: bool
 
     # Dynamic state during run
     current_attempt: int
@@ -394,6 +395,7 @@ class SingleGroupParserAgent:
     def _start_node(self, state: SingleGroupParseGraphState) -> SingleGroupParseGraphState | Dict[str, Any]:
         """Initializes indices, clears failed index, fetches samples."""
         group_name = state['group_name']
+        keep_unparsed_index = state.get('keep_unparsed_index', False) # Get the flag
         self._logger.info(f"[{group_name}] Starting graph run...")
         errors = []
         source_index = ""
@@ -417,6 +419,18 @@ class SingleGroupParserAgent:
             except Exception as del_e:
                  # Log error but continue, maybe index didn't exist or perms issue
                  self._logger.warning(f"[{group_name}] Could not delete failed index {failed_index} (might not exist): {del_e}")
+            # ---------------------------------------------
+
+            # --- Conditionally Clear the UNPARSED index ---
+            if not keep_unparsed_index:
+                try:
+                     self._logger.info(f"[{group_name}] Deleting existing unparsed index: {failed_index}")
+                     delete_resp = self._db.instance.indices.delete(index=failed_index, ignore=[400, 404])
+                     self._logger.info(f"[{group_name}] Delete response for {failed_index}: {delete_resp}")
+                except Exception as del_e:
+                     self._logger.warning(f"[{group_name}] Could not delete unparsed index {failed_index} (might not exist): {del_e}")
+            else:
+                 self._logger.info(f"[{group_name}] Skipping deletion of unparsed index: {failed_index} (--keep-unparsed specified)")
             # ---------------------------------------------
 
             # Fetch samples (generation)
@@ -835,10 +849,11 @@ class AllGroupsParserAgent:
         initial_state: AllGroupsParserState,
         num_threads: int = 1,
         batch_size: int = 5000,
-        sample_size: int = 20, # Sample for generation
+        sample_size: int = 10, # Sample for generation
         validation_sample_size: int = 10,
         validation_threshold: float = 0.5,
-        max_regeneration_attempts: int = 3 # Default 3 attempts = 2 retries
+        max_regeneration_attempts: int = 5,# Default 3 attempts = 2 retries
+        keep_unparsed_index: bool = False # <-- Accept flag
     ) -> AllGroupsParserState:
         self._logger.info(f"Starting AllGroupsParserAgent run. Workers: {num_threads}, Batch: {batch_size}, GenSample: {sample_size}, ValSample: {validation_sample_size}, MaxAttempts: {max_regeneration_attempts}")
         result_state = initial_state.copy()
@@ -859,7 +874,8 @@ class AllGroupsParserAgent:
             "sample_size_generation": sample_size,
             "sample_size_validation": validation_sample_size,
             "validation_threshold": validation_threshold,
-            "max_regeneration_attempts": max_regeneration_attempts
+            "max_regeneration_attempts": max_regeneration_attempts,
+            "keep_unparsed_index": keep_unparsed_index # <-- Pass flag here
             # group_name will be added per task
         }
 

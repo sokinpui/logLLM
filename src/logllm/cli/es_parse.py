@@ -42,7 +42,7 @@ def handle_es_parse(args):
     # --- Validate Inputs ---
     if num_threads < 1: num_threads = 1
     if batch_size < 1: batch_size = 5000
-    if sample_size < 1: sample_size = 20
+    if sample_size < 1: sample_size = 10
     if validation_sample_size < 1: validation_sample_size = 10
     if not (0.0 <= validation_threshold <= 1.0): validation_threshold = 0.5
     if max_regeneration_attempts < 0: max_regeneration_attempts = 0 # 0 retries means 1 attempt
@@ -271,7 +271,7 @@ def register_es_parse_parser(subparsers):
         help='Documents to process/index per batch (default: 5000).'
     )
     es_parse_parser.add_argument(
-        '-s', '--sample-size', type=int, default=20, # Keep updated default
+        '-s', '--sample-size', type=int, default=10, # Keep updated default
         help='Log lines to sample for LLM Grok pattern generation (default: 20).'
     )
 
@@ -296,6 +296,12 @@ def register_es_parse_parser(subparsers):
     es_parse_parser.add_argument(
         '-t', '--threads', type=int, default=default_threads,
         help=f'Parallel workers for ALL groups (ignored for single group). Default: {default_threads}. {max_help}'
+    )
+
+    es_parse_parser.add_argument(
+        '--keep-unparsed',
+        action='store_true', # Default is False (meaning delete)
+        help="Do not delete the corresponding 'unparsed_log_*' index before running. By default, the index is cleared."
     )
 
     # Set the handler function
