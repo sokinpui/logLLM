@@ -6,6 +6,8 @@ from typing import TypedDict, Dict, List, Optional, Tuple, Any, Callable
 from pygrok import Grok
 from pydantic import BaseModel, Field
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from langgraph.graph import StateGraph, END
+from langgraph.graph.graph import CompiledGraph
 
 # Relative imports (ensure paths are correct)
 try:
@@ -38,21 +40,29 @@ class ScrollGrokParserState(TypedDict):
     error_count: int
     status: str
 
-class SingleGroupParserState(TypedDict):
+class SingleGroupParseGraphState(TypedDict):
+    # Input configuration
     group_name: str
-    group_id_field: Optional[str]
-    group_id_value: Optional[Any]
     source_index: str
     target_index: str
     field_to_parse: str
     fields_to_copy: Optional[List[str]]
-    batch_size: int # <--- Added Batch Size (to pass down)
-    sample_size: int # <--- Added Sample Size
-    # State/Results
-    generated_grok_pattern: Optional[str]
-    parsing_status: str
-    parsing_result: Optional[ScrollGrokParserState]
-    fallback_used: bool # <--- Added flag
+    sample_size_generation: int # How many samples for LLM generation
+    sample_size_validation: int # How many samples for pattern validation
+    validation_threshold: float # Min success rate (0.0-1.0) for validation pass
+    batch_size: int
+    max_regeneration_attempts: int
+
+    # Dynamic state during run
+    current_attempt: int
+    current_grok_pattern: Optional[str]
+    last_failed_pattern: Optional[str] # Store the previously failed pattern
+    sample_lines_for_generation: List[str]
+    sample_lines_for_validation: List[str]
+    validation_passed: bool
+    final_parsing_status: str # e.g., "success", "success_fallback", "failed"
+    final_parsing_results: Optional[Dict[str, Any]] # Results from ScrollGrokParserAgent
+    error_messages: List[str] # Accumulate errors
 
 class AllGroupsParserState(TypedDict):
     group_info_index: str
@@ -60,78 +70,78 @@ class AllGroupsParserState(TypedDict):
     fields_to_copy: Optional[List[str]]
     # Note: batch_size and sample_size are passed into run, not stored here
     # Results per group
-    group_results: Dict[str, SingleGroupParserState]
+    group_results: Dict[str, SingleGroupParseGraphState]
     status: str
 
-def _parallel_group_worker(
-    group_info: Dict[str, Any],
-    field_to_parse: str,
-    fields_to_copy: Optional[List[str]],
-    batch_size: int,
-    sample_size: int,
-    prompts_json_path: str # Need path to initialize PromptsManager in worker
-    # Add other necessary config if needed (e.g., model name, db url)
-) -> Tuple[str, SingleGroupParserState]:
+def _parallel_group_worker_new(
+    single_group_config: Dict[str, Any], # Pass the combined config dict
+    prompts_json_path: str
+    # Add other args needed for dependency init if required (e.g., db_url, model_name)
+) -> Tuple[str, SingleGroupParseGraphState]: # <-- UPDATED RETURN TYPE HINT
     """
-    Worker function executed by each process to parse a single group.
-    Initializes its own dependencies.
+    Worker function for parallel execution. Initializes its own dependencies
+    and runs the SingleGroupParserAgent (which uses LangGraph).
+    Returns the group name and the final state dictionary from the graph run.
     """
-    group_name = group_info.get("group_name", "UnknownGroup")
-    # Initialize dependencies within the worker process
-    # This ensures objects are created in the child process, avoiding pickle issues
-    worker_logger = Logger() # Or configure logging specific to workers if needed
+    group_name = single_group_config.get("group_name", "UnknownGroup")
+    worker_logger = Logger() # Independent logger for the worker
     worker_logger.info(f"[Worker-{os.getpid()}] Processing Group: {group_name}")
 
     try:
-        # It's generally safer to re-initialize potentially non-pickleable/stateful objects
+        # Initialize dependencies within the worker
+        # Ensure these classes can be initialized using environment variables or defaults
+        # Needs access to cfg constants like ELASTIC_SEARCH_URL, GEMINI_LLM_MODEL
         db_worker = ElasticsearchDatabase()
         if db_worker.instance is None:
             raise ConnectionError("Worker failed to connect to Elasticsearch.")
 
-        # Model initialization needs API keys (ensure env vars are inherited)
-        model_worker = GeminiModel() # Or pass model name if configurable
-
-        # PromptsManager needs the path to the JSON file
+        # Needs access to API keys (ensure environment variables are inherited by workers)
+        model_worker = GeminiModel() # Consider passing model name via config if needed
         prompts_manager_worker = PromptsManager(json_file=prompts_json_path)
 
-        # Initialize the agent that handles the single group logic
+        # Instantiate the LangGraph-based agent for this worker
         sg_agent_worker = SingleGroupParserAgent(
             model=model_worker,
             db=db_worker,
             prompts_manager=prompts_manager_worker
         )
 
-        # Prepare the initial state for the single group agent
-        single_group_state: SingleGroupParserState = {
-            "group_name": group_name,
-            "field_to_parse": field_to_parse,
-            "fields_to_copy": fields_to_copy,
-            "batch_size": batch_size,
-            "sample_size": sample_size,
-            # Set defaults or derive from group_info if needed
-            "group_id_field": None,
-            "group_id_value": None,
-            "source_index": "", # Will be set by agent run
-            "target_index": "", # Will be set by agent run
-            "generated_grok_pattern": None,
-            "parsing_status": "pending",
-            "parsing_result": None
-        }
+        # Run the agent with the provided config dictionary
+        # The agent's run method executes the internal LangGraph
+        final_state: SingleGroupParseGraphState = sg_agent_worker.run(single_group_config)
 
-        # Run the single group parsing logic
-        final_state = sg_agent_worker.run(single_group_state)
-        worker_logger.info(f"[Worker-{os.getpid()}] Finished Group: {group_name}, Status: {final_state['parsing_status']}")
+        worker_logger.info(f"[Worker-{os.getpid()}] Finished Group: {group_name}, Final Status: {final_state.get('final_parsing_status', 'unknown')}")
+        # Return the group name and the entire final state dictionary
         return group_name, final_state
 
     except Exception as e:
-        worker_logger.error(f"[Worker-{os.getpid()}] Error processing group '{group_name}': {e}", exc_info=True)
-        # Return a failed state if an unexpected error occurs during worker execution
-        failed_state: SingleGroupParserState = {
-             "group_name": group_name, "parsing_status": "failed",
-             "field_to_parse": field_to_parse, "fields_to_copy": fields_to_copy,
-             "batch_size": batch_size, "sample_size": sample_size,
-             "source_index": "", "target_index": "", "generated_grok_pattern": None,
-             "parsing_result": None # Indicate failure
+        worker_logger.error(f"[Worker-{os.getpid()}] CRITICAL Error processing group '{group_name}': {e}", exc_info=True)
+
+        # Construct a failed state dictionary matching SingleGroupParseGraphState structure
+        # Ensure all required keys from the TypedDict are present
+        failed_state: SingleGroupParseGraphState = {
+            # --- Copy required fields from input config ---
+            "group_name": group_name,
+            "field_to_parse": single_group_config.get('field_to_parse', 'content'),
+            "fields_to_copy": single_group_config.get('fields_to_copy'),
+            "sample_size_generation": single_group_config.get('sample_size_generation', 10),
+            "sample_size_validation": single_group_config.get('sample_size_validation', 10),
+            "validation_threshold": single_group_config.get('validation_threshold', 0.5),
+            "batch_size": single_group_config.get('batch_size', 5000),
+            "max_regeneration_attempts": single_group_config.get('max_regeneration_attempts', 3),
+            # --- Set default/failure values for dynamic state ---
+            "source_index": "", # Indicate failure to determine
+            "target_index": "",
+            "current_attempt": 0, # Indicate run didn't proceed normally
+            "current_grok_pattern": None,
+            "last_failed_pattern": None,
+            "sample_lines_for_generation": [],
+            "sample_lines_for_validation": [],
+            "validation_passed": False,
+            # --- Set final status and results to reflect failure ---
+            "final_parsing_status": "failed (worker critical error)",
+            "final_parsing_results": None, # No results from scroll parser
+            "error_messages": [f"Worker critical error: {e}"]
         }
         return group_name, failed_state
 
@@ -327,208 +337,410 @@ class ScrollGrokParserAgent:
         return result_state
 
 
-# --- SingleGroupParserAgent ---
+# --- NEW SingleGroupParserAgent (Refactored with LangGraph) ---
 class SingleGroupParserAgent:
-    # Removed hardcoded SAMPLE_SIZE
-    # SAMPLE_SIZE = 20
+    # Constants
+    FALLBACK_PATTERN = "%{GREEDYDATA:original_content}" # Use specific field name
 
     def __init__(self, model: LLMModel, db: ElasticsearchDatabase, prompts_manager: PromptsManager):
         self._model = model
         self._db = db
         self._prompts_manager = prompts_manager
         self._logger = Logger()
+        # Keep instance of the scroll parser
         self._scroll_parser_agent = ScrollGrokParserAgent(db)
+        # Compile graph on init
+        self.graph = self._build_graph()
 
-    # _get_sample_lines (Accepts sample_size)
-    def _get_sample_lines(self, source_index: str, field_to_parse: str, sample_size: int) -> List[str]: # <--- Added sample_size arg
-        self._logger.info(f"Fetching {sample_size} sample lines for field '{field_to_parse}' from index '{source_index}'...")
-        samples = self._db.get_sample_lines(
-            index=source_index,
-            field=field_to_parse,
-            sample_size=sample_size # <--- Use provided sample size
-        )
-        if not samples: self._logger.warning(f"Could not retrieve samples from index '{source_index}'.")
-        return samples
+    # --- Graph Nodes ---
 
-    # _generate_grok_pattern (remains the same)
-    def _generate_grok_pattern(self, sample_logs: List[str]) -> Optional[str]:
-        if not sample_logs: return None
+    def _start_node(self, state: SingleGroupParseGraphState) -> SingleGroupParseGraphState | Dict[str, Any]:
+        """Initializes indices, fetches samples."""
+        self._logger.info(f"[{state['group_name']}] Starting graph run...")
+        errors = []
+        source_index = ""
+        target_index = ""
+        samples_gen = []
+        samples_val = []
+
         try:
-            prompt_key = "logllm.agents.parser_agent.SimpleGrokLogParserAgent._generate_grok_pattern"
-            prompt = self._prompts_manager.get_prompt(metadata=prompt_key, sample_logs=str(sample_logs))
-            self._logger.info("Requesting Grok pattern from LLM...")
+            source_index = cfg.get_log_storage_index(state['group_name'])
+            target_index = cfg.get_parsed_log_storage_index(state['group_name'])
+            self._logger.info(f"[{state['group_name']}] Indices: Source='{source_index}', Target='{target_index}'")
+
+            # Fetch samples for generation
+            self._logger.info(f"[{state['group_name']}] Fetching {state['sample_size_generation']} samples for generation...")
+            samples_gen = self._db.get_sample_lines(
+                index=source_index, field=state['field_to_parse'], sample_size=state['sample_size_generation']
+            )
+            if not samples_gen:
+                self._logger.warning(f"[{state['group_name']}] No samples found for generation.")
+                # Don't necessarily fail here, generation might still work generically or pattern is provided
+
+            # Fetch samples for validation (can be the same or different set)
+            # For simplicity, let's fetch again. Could reuse if sample sizes are same.
+            self._logger.info(f"[{state['group_name']}] Fetching {state['sample_size_validation']} samples for validation...")
+            samples_val = self._db.get_sample_lines(
+                index=source_index, field=state['field_to_parse'], sample_size=state['sample_size_validation']
+            )
+            if not samples_val:
+                # If validation samples are missing, validation cannot proceed.
+                msg = f"[{state['group_name']}] No samples found for validation. Cannot validate pattern."
+                self._logger.error(msg)
+                errors.append(msg)
+                # This is likely a fatal error for the validation path
+                # We might need a direct edge to fallback/fail from here later
+
+        except Exception as e:
+            msg = f"[{state['group_name']}] Error during start node: {e}"
+            self._logger.error(msg, exc_info=True)
+            errors.append(msg)
+
+        return {
+            "source_index": source_index,
+            "target_index": target_index,
+            "sample_lines_for_generation": samples_gen,
+            "sample_lines_for_validation": samples_val,
+            "error_messages": errors,
+             # Reset dynamic state parts for this run
+            "current_attempt": 1,
+            "current_grok_pattern": None,
+            "last_failed_pattern": None,
+            "validation_passed": False,
+            "final_parsing_status": "pending",
+            "final_parsing_results": None
+        }
+
+    def _generate_grok_node(self, state: SingleGroupParseGraphState) -> SingleGroupParseGraphState | Dict[str, Any]:
+        """Generates Grok pattern using LLM."""
+        group_name = state['group_name']
+        attempt = state['current_attempt']
+        self._logger.info(f"[{group_name}] Attempt {attempt}: Generating Grok pattern...")
+        samples = state['sample_lines_for_generation']
+        last_failed = state.get('last_failed_pattern') # Get potentially stored failed pattern
+        errors = state.get('error_messages', [])
+        generated_pattern: Optional[str] = None
+
+        if not samples:
+            msg = f"[{group_name}] No samples available for generation on attempt {attempt}."
+            self._logger.warning(msg)
+            # errors.append(msg) # Maybe not an error, just can't generate
+            return {"current_grok_pattern": None, "error_messages": errors}
+
+        try:
+            # Prepare context about previous failure, if any
+            failed_pattern_context = ""
+            if last_failed:
+                failed_pattern_context = f"\nIMPORTANT: The previous attempt using the pattern '{last_failed}' failed to parse logs correctly. Please generate a DIFFERENT and potentially better pattern.\n"
+
+            # --- Use PromptsManager ---
+            # Ensure this key matches your prompts.json structure
+            prompt = self._prompts_manager.get_prompt(
+                sample_logs_for_generation=str(samples), # Pass correct variable
+                last_failed_pattern_context=failed_pattern_context # Pass context
+            )
+
             response = self._model.generate(prompt, schema=GrokPatternSchema)
+
             if response and isinstance(response, GrokPatternSchema) and response.grok_pattern:
                 pattern = response.grok_pattern.strip()
                 if "%{" in pattern and "}" in pattern:
-                    self._logger.info(f"LLM generated Grok pattern: {pattern}")
-                    return pattern
-            self._logger.warning(f"LLM did not return valid Grok pattern. Response: {response}")
-            return None
+                    self._logger.info(f"[{group_name}] LLM generated Grok pattern (Attempt {attempt}): {pattern}")
+                    generated_pattern = pattern
+                else:
+                     msg = f"[{group_name}] LLM response on attempt {attempt} doesn't look like a valid Grok pattern: {pattern}"
+                     self._logger.warning(msg)
+                     errors.append(msg)
+            else:
+                msg = f"[{group_name}] LLM did not return a valid pattern on attempt {attempt}. Response: {response}"
+                self._logger.warning(msg)
+                errors.append(msg)
+
+        except ValueError as ve: # Prompt formatting/variable errors
+             msg = f"[{group_name}] Error formatting prompt for Grok generation (Attempt {attempt}): {ve}"
+             self._logger.error(msg, exc_info=True)
+             errors.append(msg)
         except Exception as e:
-            self._logger.error(f"Error during Grok pattern generation: {e}", exc_info=True)
-            return None
+            msg = f"[{group_name}] LLM call failed during Grok generation (Attempt {attempt}): {e}"
+            self._logger.error(msg, exc_info=True)
+            errors.append(msg)
 
-    # run (Uses sample_size from state, passes batch_size down)
-    def run(self, initial_state: SingleGroupParserState) -> SingleGroupParserState:
-        group_name = initial_state['group_name']
-        sample_size = initial_state['sample_size']
-        batch_size = initial_state['batch_size']
-        self._logger.info(f"Starting SingleGroupParserAgent run for group: '{group_name}', SampleSize: {sample_size}, BatchSize: {batch_size}")
+        return {"current_grok_pattern": generated_pattern, "error_messages": errors}
 
-        result_state = initial_state.copy()
-        result_state["parsing_status"] = "running"
-        result_state["generated_grok_pattern"] = None
-        result_state["parsing_result"] = None
-        result_state["fallback_used"] = False # Initialize fallback flag
+    def _validate_pattern_node(self, state: SingleGroupParseGraphState) -> SingleGroupParseGraphState | Dict[str, Any]:
+        """Validates the current Grok pattern on a sample."""
+        group_name = state['group_name']
+        pattern = state.get('current_grok_pattern')
+        validation_samples = state.get('sample_lines_for_validation', [])
+        threshold = state.get('validation_threshold', 0.5) # Default 50% success rate
+        errors = state.get('error_messages', [])
+        validation_passed = False
 
-        # 1. Determine Indices
+        self._logger.info(f"[{group_name}] Validating pattern: {pattern}")
+
+        if not pattern:
+            msg = f"[{group_name}] No pattern provided to validation node."
+            self._logger.warning(msg)
+            errors.append(msg)
+            return {"validation_passed": False, "error_messages": errors}
+
+        if not validation_samples:
+            msg = f"[{group_name}] No samples available for validation."
+            self._logger.warning(msg)
+            errors.append(msg)
+            # Can't validate, treat as failure? Or skip validation? Let's fail validation.
+            return {"validation_passed": False, "error_messages": errors}
+
         try:
-             source_index = cfg.get_log_storage_index(group_name)
-             target_index = cfg.get_parsed_log_storage_index(group_name)
-             result_state["source_index"] = source_index
-             result_state["target_index"] = target_index
-             self._logger.info(f"Determined indices for group '{group_name}': Source='{source_index}', Target='{target_index}'")
+            grok = Grok(pattern)
+            parsed_count = 0
+            total_validated = 0
+            for line in validation_samples:
+                line = line.strip()
+                if not line: continue
+                total_validated += 1
+                if grok.match(line):
+                    parsed_count += 1
+
+            if total_validated == 0:
+                 self._logger.warning(f"[{group_name}] No non-empty lines in validation sample.")
+                 # Treat as validation failure if no lines could be checked
+                 validation_passed = False
+            else:
+                success_rate = parsed_count / total_validated
+                self._logger.info(f"[{group_name}] Validation Result: Parsed {parsed_count}/{total_validated} samples. Success Rate: {success_rate:.2f}")
+                if success_rate >= threshold:
+                    self._logger.info(f"[{group_name}] Validation PASSED (>= {threshold:.2f}).")
+                    validation_passed = True
+                else:
+                    self._logger.warning(f"[{group_name}] Validation FAILED (< {threshold:.2f}).")
+                    validation_passed = False
+
+        except ValueError as e: # Invalid Grok pattern syntax
+            msg = f"[{group_name}] Invalid Grok pattern syntax during validation: {pattern} - Error: {e}"
+            self._logger.error(msg, exc_info=True)
+            errors.append(msg)
+            validation_passed = False
         except Exception as e:
-             self._logger.error(f"Failed to determine indices for group '{group_name}': {e}", exc_info=True)
-             result_state["parsing_status"] = "failed"
-             return result_state
+            msg = f"[{group_name}] Error during pattern validation: {e}"
+            self._logger.error(msg, exc_info=True)
+            errors.append(msg)
+            validation_passed = False
 
-        # 2. Get Sample Logs
-        field_to_parse = initial_state['field_to_parse']
-        sample_lines = self._get_sample_lines(source_index, field_to_parse, sample_size)
-        # Don't fail immediately if no samples, LLM might still produce a generic pattern or user might provide one later?
-        # However, pattern generation will likely fail. Let's proceed and let that fail.
-        if not sample_lines:
-            self._logger.warning(f"No sample lines found for group '{group_name}'. Pattern generation likely to fail.")
+        return {"validation_passed": validation_passed, "error_messages": errors}
 
-        # 3. Generate Grok Pattern (Initial Attempt)
-        grok_pattern = self._generate_grok_pattern(sample_lines)
-        if grok_pattern:
-            result_state["generated_grok_pattern"] = grok_pattern
-            result_state["parsing_status"] = "pattern_generated"
-        else:
-            # If pattern generation fails entirely, we can't even try the primary parse.
-            # Should we attempt fallback immediately or fail? Let's try fallback.
-            self._logger.warning(f"Failed to generate Grok pattern for group '{group_name}'. Attempting fallback.")
-            grok_pattern = None # Ensure primary parse isn't attempted
 
-        # --- Attempt Primary Parsing (if pattern was generated) ---
-        initial_parsing_successful = False
-        if grok_pattern:
-            source_query = {"query": {"match_all": {}}}
-            scroll_parser_state_initial: ScrollGrokParserState = {
-                "source_index": source_index, "target_index": target_index,
-                "grok_pattern": grok_pattern, "field_to_parse": field_to_parse,
-                "source_query": source_query, "fields_to_copy": initial_state.get("fields_to_copy"),
-                "batch_size": batch_size, "processed_count": 0, "indexed_count": 0,
-                "error_count": 0, "status": "pending"
-            }
-            try:
-                 self._logger.info(f"Invoking ScrollGrokParserAgent (Attempt 1) for group '{group_name}' with generated pattern...")
-                 result_state["parsing_status"] = "parsing_running"
-                 parsing_result_initial = self._scroll_parser_agent.run(scroll_parser_state_initial)
-                 result_state["parsing_result"] = parsing_result_initial # Store initial result for now
+    def _parse_all_node(self, state: SingleGroupParseGraphState) -> SingleGroupParseGraphState | Dict[str, Any]:
+        """Parses the entire group using the validated pattern."""
+        group_name = state['group_name']
+        pattern = state['current_grok_pattern'] # Assumes validation passed
+        self._logger.info(f"[{group_name}] Validation passed. Proceeding to parse all documents with pattern: {pattern}")
 
-                 # Define success criteria for the *initial* attempt
-                 # Success = completed status AND at least some documents were indexed OR
-                 # completed status AND zero processed (source index was empty).
-                 is_completed = parsing_result_initial["status"] == "completed"
-                 processed_count = parsing_result_initial.get("processed_count", 0)
-                 indexed_count = parsing_result_initial.get("indexed_count", 0)
+        # Prepare config for ScrollGrokParserAgent
+        scroll_config = {
+            "source_index": state['source_index'],
+            "target_index": state['target_index'],
+            "grok_pattern": pattern,
+            "field_to_parse": state['field_to_parse'],
+            "fields_to_copy": state.get('fields_to_copy'),
+            "batch_size": state['batch_size'],
+            "source_query": {"query": {"match_all": {}}} # Or use a more specific query if needed
+        }
 
-                 if is_completed and (indexed_count > 0 or processed_count == 0) :
-                      initial_parsing_successful = True
-                      self._logger.info(f"Initial parsing attempt SUCCEEDED for group '{group_name}'.")
+        try:
+             # Run the scroll parser
+             parsing_results = self._scroll_parser_agent.run(scroll_config)
+
+             # Determine final status based on scroll parser results
+             final_status = "failed" # Default
+             if parsing_results.get("status") == "completed":
+                 # Check if errors occurred during the completed run
+                 if parsing_results.get("parse_error_count", 0) > 0 or parsing_results.get("index_error_count", 0) > 0:
+                      final_status = "success_with_errors"
+                      self._logger.warning(f"[{group_name}] Parse all completed but with errors.")
                  else:
-                      self._logger.warning(f"Initial parsing attempt for group '{group_name}' deemed UNSUCCESSFUL (Status: {parsing_result_initial['status']}, Processed: {processed_count}, Indexed: {indexed_count}). Attempting fallback.")
+                      final_status = "success"
+                      self._logger.info(f"[{group_name}] Parse all completed successfully.")
+             else:
+                 # If scroll parser status is not 'completed', it failed
+                 self._logger.error(f"[{group_name}] Parse all failed. Scroll parser status: {parsing_results.get('status')}")
 
-            except Exception as e:
-                 self._logger.error(f"Error during initial ScrollGrokParserAgent invocation for group '{group_name}': {e}", exc_info=True)
-                 result_state["parsing_status"] = "failed" # Mark outer status
-                 # Store the failed state attempt
-                 scroll_parser_state_initial["status"] = "failed"
-                 result_state["parsing_result"] = scroll_parser_state_initial
-                 initial_parsing_successful = False # Ensure fallback is triggered if needed
-
-
-        # --- Fallback Logic ---
-        if not initial_parsing_successful:
-            result_state["fallback_used"] = True
-            fallback_grok_pattern = "%{GREEDYDATA:message}" # Simple fallback pattern
-            self._logger.warning(f"Executing FALLBACK parsing for group '{group_name}' using pattern: {fallback_grok_pattern}")
-
-            # Re-prepare the state for the scroll parser with the fallback pattern
-            source_query = {"query": {"match_all": {}}} # Reset query just in case
-            scroll_parser_state_fallback: ScrollGrokParserState = {
-                "source_index": source_index, "target_index": target_index,
-                "grok_pattern": fallback_grok_pattern, # Use fallback pattern
-                "field_to_parse": field_to_parse,
-                "source_query": source_query, "fields_to_copy": initial_state.get("fields_to_copy"),
-                "batch_size": batch_size, "processed_count": 0, "indexed_count": 0,
-                "error_count": 0, "status": "pending"
+             return {
+                 "final_parsing_status": final_status,
+                 "final_parsing_results": parsing_results
+             }
+        except Exception as e:
+            msg = f"[{group_name}] Critical error invoking ScrollGrokParserAgent: {e}"
+            self._logger.error(msg, exc_info=True)
+            return {
+                "final_parsing_status": "failed",
+                "final_parsing_results": {"status": "failed", "error_details": [msg]},
+                "error_messages": state.get("error_messages", []) + [msg]
             }
-            try:
-                 # Run the scroll parser again with the fallback pattern
-                 parsing_result_fallback = self._scroll_parser_agent.run(scroll_parser_state_fallback)
-                 # *** Overwrite the parsing_result with the fallback result ***
-                 result_state["parsing_result"] = parsing_result_fallback
 
-                 # Update overall status based on fallback result
-                 if parsing_result_fallback["status"] == "completed":
-                      result_state["parsing_status"] = "completed_fallback" # Use a specific status
-                      self._logger.info(f"Fallback parsing completed for group '{group_name}'.")
-                 else:
-                      result_state["parsing_status"] = "failed_fallback" # Indicate fallback itself failed
-                      self._logger.error(f"Fallback parsing FAILED for group '{group_name}'.")
+    def _fallback_node(self, state: SingleGroupParseGraphState) -> SingleGroupParseGraphState | Dict[str, Any]:
+        """Parses the entire group using the fallback pattern."""
+        group_name = state['group_name']
+        self._logger.warning(f"[{group_name}] Executing FALLBACK parsing with pattern: {self.FALLBACK_PATTERN}")
 
-            except Exception as e:
-                 self._logger.error(f"Error during FALLBACK ScrollGrokParserAgent invocation for group '{group_name}': {e}", exc_info=True)
-                 result_state["parsing_status"] = "failed_fallback"
-                 # Store the failed fallback state attempt
-                 scroll_parser_state_fallback["status"] = "failed"
-                 result_state["parsing_result"] = scroll_parser_state_fallback
+        # Prepare config for ScrollGrokParserAgent
+        scroll_config = {
+            "source_index": state['source_index'],
+            "target_index": state['target_index'],
+            "grok_pattern": self.FALLBACK_PATTERN, # Use the fallback
+            "field_to_parse": state['field_to_parse'], # Still need original field
+            "fields_to_copy": state.get('fields_to_copy'),
+            "batch_size": state['batch_size'],
+            "source_query": {"query": {"match_all": {}}}
+        }
 
-        # --- Final Status Update ---
-        # If initial parsing was successful, the status is already 'completed' (implicitly)
-        # If initial failed and fallback succeeded, status is 'completed_fallback'
-        # If initial failed and fallback failed, status is 'failed_fallback'
-        # If pattern generation failed and fallback succeeded, status is 'completed_fallback'
-        # If pattern generation failed and fallback failed, status is 'failed_fallback'
+        try:
+             # Run the scroll parser
+             parsing_results = self._scroll_parser_agent.run(scroll_config)
+             final_status = "failed_fallback" # Default
+             if parsing_results.get("status") == "completed":
+                 final_status = "success_fallback" # Mark success specifically as fallback
+                 self._logger.info(f"[{group_name}] Fallback parsing completed.")
+             else:
+                 self._logger.error(f"[{group_name}] Fallback parsing FAILED. Scroll parser status: {parsing_results.get('status')}")
 
-        # Simplify final status for overall reporting?
-        final_parsing_result = result_state.get("parsing_result")
-        if final_parsing_result:
-            last_run_status = final_parsing_result.get("status", "failed") # Get status of the last attempt
-            if last_run_status == "completed":
-                # If the last run completed, was it the initial or fallback?
-                if result_state.get("fallback_used"):
-                    result_state["parsing_status"] = "completed_fallback"
-                else:
-                    result_state["parsing_status"] = "completed"
-            else: # Last run failed
-                if result_state.get("fallback_used"):
-                    result_state["parsing_status"] = "failed_fallback"
-                else:
-                    # If initial failed and no fallback was triggered (e.g., pattern error), mark as failed
-                    result_state["parsing_status"] = "failed"
+             return {
+                 "final_parsing_status": final_status,
+                 "final_parsing_results": parsing_results
+             }
+        except Exception as e:
+            msg = f"[{group_name}] Critical error invoking ScrollGrokParserAgent during fallback: {e}"
+            self._logger.error(msg, exc_info=True)
+            return {
+                "final_parsing_status": "failed_fallback",
+                "final_parsing_results": {"status": "failed", "error_details": [msg]},
+                "error_messages": state.get("error_messages", []) + [msg]
+            }
+
+    def _prepare_for_retry_node(self, state: SingleGroupParseGraphState) -> SingleGroupParseGraphState | Dict[str, Any]:
+        """Increments attempt count and stores the failed pattern."""
+        group_name = state['group_name']
+        current_attempt = state.get('current_attempt', 1)
+        failed_pattern = state.get('current_grok_pattern')
+        self._logger.info(f"[{group_name}] Preparing for retry. Storing failed pattern: {failed_pattern}")
+        return {
+            "current_attempt": current_attempt + 1,
+            "last_failed_pattern": failed_pattern,
+            "current_grok_pattern": None # Clear current pattern for regeneration
+        }
+
+    # --- Conditional Edges ---
+
+    def _decide_after_generate(self, state: SingleGroupParseGraphState) -> str:
+        """Decides whether to validate or fallback after pattern generation."""
+        group_name = state['group_name']
+        if state.get('current_grok_pattern'):
+            self._logger.debug(f"[{group_name}] Pattern generated, moving to validation.")
+            return "validate_pattern"
         else:
-            # If no parsing result exists at all (e.g., index determination failed)
-            # The status should already be "failed" from earlier checks.
-            # Ensure it defaults to failed if somehow missed.
-            if "parsing_status" not in result_state or result_state["parsing_status"] == "running":
-                 result_state["parsing_status"] = "failed"
+            # If generation failed even on first attempt, go to fallback
+            # (Could add more nuanced logic here if needed)
+            self._logger.warning(f"[{group_name}] Pattern generation failed, moving to fallback.")
+            return "fallback"
 
-
-        # Simplify final status for overall reporting (Used for logging/display)
-        final_status_for_display = result_state["parsing_status"]
-        if final_status_for_display in ["completed", "completed_fallback"]:
-             final_log_status = "SUCCESS" if final_parsing_result and final_parsing_result.get("error_count", 1) == 0 else "COMPLETED_WITH_ERRORS"
+    def _decide_after_validation(self, state: SingleGroupParseGraphState) -> str:
+        """Decides whether to parse all, retry, or fallback after validation."""
+        group_name = state['group_name']
+        if state.get('validation_passed'):
+            self._logger.debug(f"[{group_name}] Validation passed, moving to parse_all.")
+            return "parse_all"
         else:
-             final_log_status = "FAILURE"
+            # Validation failed, check if retries are exhausted
+            current_attempt = state.get('current_attempt', 1)
+            max_attempts = state.get('max_regeneration_attempts', 3)
+            if current_attempt < max_attempts:
+                self._logger.warning(f"[{group_name}] Validation failed (Attempt {current_attempt}/{max_attempts}), preparing for retry.")
+                return "prepare_for_retry"
+            else:
+                self._logger.error(f"[{group_name}] Validation failed after max attempts ({max_attempts}), moving to fallback.")
+                return "fallback"
 
-        self._logger.info(f"Finished SingleGroupParserAgent run for group '{group_name}'. Final Status: {final_status_for_display} ({final_log_status})")
-        return result_state
+    # --- Build Graph ---
+    def _build_graph(self) -> CompiledGraph:
+        """Builds the LangGraph StateGraph."""
+        workflow = StateGraph(SingleGroupParseGraphState)
+
+        # Add nodes
+        workflow.add_node("start", self._start_node)
+        workflow.add_node("generate_grok", self._generate_grok_node)
+        workflow.add_node("validate_pattern", self._validate_pattern_node)
+        workflow.add_node("prepare_for_retry", self._prepare_for_retry_node)
+        workflow.add_node("parse_all", self._parse_all_node)
+        workflow.add_node("fallback", self._fallback_node)
+
+        # Set entry point
+        workflow.set_entry_point("start")
+
+        # Add edges
+        workflow.add_edge("start", "generate_grok")
+
+        # Conditional edge after generation
+        workflow.add_conditional_edges(
+            "generate_grok",
+            self._decide_after_generate,
+            {
+                "validate_pattern": "validate_pattern",
+                "fallback": "fallback",
+            }
+        )
+
+        # Conditional edge after validation
+        workflow.add_conditional_edges(
+            "validate_pattern",
+            self._decide_after_validation,
+            {
+                "parse_all": "parse_all",
+                "prepare_for_retry": "prepare_for_retry",
+                "fallback": "fallback", # Directly fallback if max retries hit here
+            }
+        )
+
+        # Edge after preparing for retry
+        workflow.add_edge("prepare_for_retry", "generate_grok") # Loop back to generate
+
+        # Edges to end
+        workflow.add_edge("parse_all", END)
+        workflow.add_edge("fallback", END)
+
+        # Compile the graph
+        return workflow.compile()
+
+    # --- Run Method ---
+    def run(self, initial_config: Dict[str, Any]) -> SingleGroupParseGraphState | Dict[str, Any]:
+        """Runs the Grok parsing graph for a single group."""
+        group_name = initial_config['group_name']
+        self._logger.info(f"[{group_name}] Initializing SingleGroupParserAgent run...")
+
+        # Prepare the initial state for the graph
+        graph_input: SingleGroupParseGraphState = {
+            "group_name": group_name,
+            "field_to_parse": initial_config['field_to_parse'],
+            "fields_to_copy": initial_config.get('fields_to_copy'),
+            "sample_size_generation": initial_config.get('sample_size', 10), # Use sample_size from config
+            "sample_size_validation": initial_config.get('validation_sample_size', 10), # Default validation size
+            "validation_threshold": initial_config.get('validation_threshold', 0.5), # Default threshold
+            "batch_size": initial_config['batch_size'],
+            "max_regeneration_attempts": initial_config.get('max_regeneration_attempts', 5), # Default attempts
+            # --- Defaults for dynamic state ---
+            "source_index": "", "target_index": "", "current_attempt": 0,
+            "current_grok_pattern": None, "last_failed_pattern": None,
+            "sample_lines_for_generation": [], "sample_lines_for_validation": [],
+            "validation_passed": False, "final_parsing_status": "pending",
+            "final_parsing_results": None, "error_messages": []
+        }
+
+        # Execute the graph
+        final_state = self.graph.invoke(graph_input)
+
+        self._logger.info(f"[{group_name}] Finished SingleGroupParserAgent run. Final Status: {final_state.get('final_parsing_status')}")
+        # Return the full final state
+        return final_state
+
 
 
 # --- AllGroupsParserAgent ---
@@ -562,81 +774,101 @@ class AllGroupsParserAgent:
     def run(
         self,
         initial_state: AllGroupsParserState,
-        num_threads: int = 1, # Note: Argument name is threads, but uses ProcessPoolExecutor
+        num_threads: int = 1,
         batch_size: int = 5000,
-        sample_size: int = 20
-    ) -> AllGroupsParserState:
-        self._logger.info(f"Starting AllGroupsParserAgent run. Group Index: '{initial_state['group_info_index']}'. Workers: {num_threads}, BatchSize: {batch_size}, SampleSize: {sample_size}")
+        sample_size: int = 20,
+        validation_sample_size: int = 10,
+        validation_threshold: float = 0.5,
+        max_regeneration_attempts: int = 3
+    ) -> AllGroupsParserState: # Return type matches updated state
+        self._logger.info(f"Starting AllGroupsParserAgent run. Workers: {num_threads}, Batch: {batch_size}, GenSample: {sample_size}, ValSample: {validation_sample_size}")
         result_state = initial_state.copy()
         result_state["status"] = "running"
-        result_state["group_results"] = {}
+        result_state["group_results"] = {} # Initialize with correct type expected
 
         groups_to_process = self._get_all_groups(initial_state['group_info_index'])
         if not groups_to_process:
-             result_state["status"] = "completed"; return result_state
+            result_state["status"] = "completed (no groups)"; return result_state
 
-        field_to_parse = initial_state['field_to_parse']
-        fields_to_copy = initial_state.get('fields_to_copy')
-        effective_num_workers = max(1, num_threads) # Use 'workers' internally for clarity
+        # --- Prepare Base Configuration Dictionary ---
+        single_group_base_config = {
+            "field_to_parse": initial_state['field_to_parse'],
+            "fields_to_copy": initial_state.get('fields_to_copy'),
+            "batch_size": batch_size,
+            "sample_size_generation": sample_size, # Map CLI/run arg to state key
+            "sample_size_validation": validation_sample_size,
+            "validation_threshold": validation_threshold,
+            "max_regeneration_attempts": max_regeneration_attempts
+        }
 
-        # Need the path for the prompts file to pass to workers
-        prompts_json_path = self._prompts_manager.json_file
+        effective_num_workers = max(1, num_threads)
 
         if effective_num_workers <= 1:
-            # --- Sequential Execution (remains largely the same) ---
+            # --- Sequential Execution ---
             self._logger.info("Running group parsing sequentially.")
+            sg_agent = SingleGroupParserAgent(self._model, self._db, self._prompts_manager)
             for group_info in groups_to_process:
                 group_name = group_info["group_name"]
-                self._logger.info(f"--- Processing Group: {group_name} ---")
-                single_group_state: SingleGroupParserState = {
-                    "group_name": group_name,
-                    "field_to_parse": field_to_parse,
-                    "fields_to_copy": fields_to_copy,
-                    "batch_size": batch_size,
-                    "sample_size": sample_size,
-                    "group_id_field": None,"group_id_value": None,"source_index": "","target_index": "",
-                    "generated_grok_pattern": None,"parsing_status": "pending","parsing_result": None
-                }
+                self._logger.info(f"--- Processing Group (Seq): {group_name} ---")
+                current_config = {**single_group_base_config, "group_name": group_name}
                 try:
-                    final_group_state = self._single_group_agent.run(single_group_state)
+                    final_group_state: SingleGroupParseGraphState = sg_agent.run(current_config)
                     result_state["group_results"][group_name] = final_group_state
                 except Exception as e:
-                    self._logger.error(f"Error processing group '{group_name}' sequentially: {e}")
-                    single_group_state["parsing_status"] = "failed"
-                    result_state["group_results"][group_name] = single_group_state
+                    self._logger.error(f"Error processing group '{group_name}' sequentially: {e}", exc_info=True)
+                    # Construct and store a failed state
+                    failed_state_info: SingleGroupParseGraphState = {
+                         **current_config,
+                         "source_index": "", "target_index": "", "current_attempt": 0,
+                         "current_grok_pattern": None, "last_failed_pattern": None,
+                         "sample_lines_for_generation": [], "sample_lines_for_validation": [],
+                         "validation_passed": False,
+                         "final_parsing_status": "failed (agent error)",
+                         "final_parsing_results": None,
+                         "error_messages": [f"Agent execution failed: {e}"]
+                     }
+                    result_state["group_results"][group_name] = failed_state_info
         else:
-            # --- Parallel Execution (Use the top-level worker) ---
-            self._logger.info(f"Running group parsing in parallel with {effective_num_workers} THREADS.") # Log change
-            # *** Use ThreadPoolExecutor instead ***
+            # --- Parallel Execution ---
+            self._logger.info(f"Running group parsing in parallel with {effective_num_workers} threads.")
+            prompts_json_path = self._prompts_manager.json_file
+
             with ThreadPoolExecutor(max_workers=effective_num_workers) as executor:
-                # The rest of the submission and result collection logic
-                # using _parallel_group_worker remains the same.
-                # Note: _parallel_group_worker still initializes its own objects,
-                # which is fine for threads too, though less strictly necessary.
-                future_to_group = {
-                    executor.submit(
-                        _parallel_group_worker,
-                        group_info, field_to_parse, fields_to_copy,
-                        batch_size, sample_size, prompts_json_path
-                     ): group_info["group_name"]
-                    for group_info in groups_to_process
-                }
-                # ... (as_completed loop remains the same) ...
+                future_to_group = {}
+                for group_info in groups_to_process:
+                    group_name = group_info["group_name"]
+                    current_config = {**single_group_base_config, "group_name": group_name}
+                    # Submit the updated worker
+                    future = executor.submit(
+                        _parallel_group_worker_new, # Use the updated worker
+                        current_config,             # Pass the config dict
+                        prompts_json_path
+                    )
+                    future_to_group[future] = group_name
+
                 for future in as_completed(future_to_group):
                     group_name_future = future_to_group[future]
-                    self._logger.info(f"Waiting for result from future for group: {group_name_future}...")
                     try:
-                        group_name_result, final_state = future.result(timeout=600) # Add a long timeout (e.g., 10 minutes)
-                        self._logger.info(f"Received result for group: {group_name_result}. Status: {final_state.get('parsing_status')}")
-                        result_state["group_results"][group_name_result] = final_state
-                    except TimeoutError:
-                         self._logger.error(f"TIMEOUT waiting for result from group '{group_name_future}'. Worker likely stuck or crashed.")
-                         # Handle failed state...
+                        # Worker now returns the full final state dict
+                        group_name_result, final_state_result = future.result() # Unpack tuple
+                        status_report = final_state_result.get('final_parsing_status', 'unknown')
+                        self._logger.info(f"Received result for group: {group_name_result}. Status: {status_report}")
+                        result_state["group_results"][group_name_result] = final_state_result
                     except Exception as e:
                          self._logger.error(f"Error retrieving result for group '{group_name_future}': {e}", exc_info=True)
-                         # Handle failed state...
-                self._logger.info("Finished processing all futures in as_completed loop.") # Check if this logs
-
+                         # Construct and store a failed state
+                         failed_state_info: SingleGroupParseGraphState = {
+                            **single_group_base_config, # Base config
+                            "group_name": group_name_future,
+                            "source_index": "", "target_index": "", "current_attempt": 0,
+                            "current_grok_pattern": None, "last_failed_pattern": None,
+                            "sample_lines_for_generation": [], "sample_lines_for_validation": [],
+                            "validation_passed": False,
+                            "final_parsing_status": "failed (worker error)",
+                            "final_parsing_results": None,
+                            "error_messages": [f"Worker execution failed: {e}"]
+                         }
+                         result_state["group_results"][group_name_future] = failed_state_info
 
         result_state["status"] = "completed"
         self._logger.info("AllGroupsParserAgent run finished.")

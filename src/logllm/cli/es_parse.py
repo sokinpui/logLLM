@@ -3,14 +3,16 @@
 import argparse
 import sys
 import multiprocessing
+import os # Import os for path manipulation if needed
 
 try:
-    # Import both agents now, as handle_es_parse might use either
+    # Import agents - paths might need adjustment based on final structure
+    # The main agents used here are AllGroupsParserAgent and SingleGroupParserAgent
     from ..agents.es_parser_agent import (
         AllGroupsParserAgent,
         SingleGroupParserAgent,
-        AllGroupsParserState,
-        SingleGroupParserState
+        AllGroupsParserState, # State for the orchestrator
+        SingleGroupParseGraphState # Final state returned for each group
     )
     from ..utils.llm_model import GeminiModel
     from ..utils.database import ElasticsearchDatabase
@@ -24,49 +26,47 @@ except ImportError as e:
 logger = Logger()
 
 def handle_es_parse(args):
-    """Handles the logic for the 'es-parse' command."""
+    """Handles the logic for the 'es-parse' command using the new agents."""
     num_threads = args.threads
     batch_size = args.batch_size
-    sample_size = args.sample_size
-    target_group = args.group # <--- Get the specific group name, if provided
+    sample_size = args.sample_size # Used for generation
+    target_group = args.group
+    field_to_parse = args.field
+    fields_to_copy = args.copy_fields
+
+    # --- Get new config options from args ---
+    validation_sample_size = args.validation_sample_size
+    validation_threshold = args.validation_threshold
+    max_regeneration_attempts = args.max_retries # Renamed arg
 
     # --- Validate Inputs ---
-    if num_threads < 1:
-        logger.warning(f"Invalid thread count ({num_threads}) specified. Defaulting to 1.")
-        num_threads = 1
-    if batch_size < 1:
-        logger.warning(f"Invalid batch size ({batch_size}) specified. Defaulting to 5000.")
-        batch_size = 5000
-    if sample_size < 1:
-        logger.warning(f"Invalid sample size ({sample_size}) specified. Defaulting to 20.")
-        sample_size = 20
+    if num_threads < 1: num_threads = 1
+    if batch_size < 1: batch_size = 5000
+    if sample_size < 1: sample_size = 20
+    if validation_sample_size < 1: validation_sample_size = 10
+    if not (0.0 <= validation_threshold <= 1.0): validation_threshold = 0.5
+    if max_regeneration_attempts < 0: max_regeneration_attempts = 0 # 0 retries means 1 attempt
 
     # Log execution mode
     if target_group:
-        # Ignore threads for single group parsing (it runs sequentially within the group anyway)
-        if num_threads > 1:
-            logger.warning(f"Ignoring --threads ({num_threads}) when parsing a single group ('{target_group}').")
         effective_num_threads = 1
-        logger.info(f"Executing Elasticsearch parse command for SINGLE group: '{target_group}'. Batch Size: {batch_size}, Sample Size: {sample_size}")
-        print(f"Starting Elasticsearch log parsing for SINGLE group: '{target_group}'. Batch Size: {batch_size}, Sample Size: {sample_size}")
+        logger.info(f"Executing ES parse for SINGLE group: '{target_group}'. Batch: {batch_size}, GenSample: {sample_size}, ValSample: {validation_sample_size}, Retries: {max_regeneration_attempts}")
+        print(f"Starting ES log parsing for SINGLE group: '{target_group}'.")
     else:
         effective_num_threads = num_threads
-        logger.info(f"Executing Elasticsearch parse command for ALL groups. Workers: {effective_num_threads}, Batch Size: {batch_size}, Sample Size: {sample_size}")
-        print(f"Starting Elasticsearch log parsing for ALL groups. Workers: {effective_num_threads}, Batch Size: {batch_size}, Sample Size: {sample_size}")
-
+        logger.info(f"Executing ES parse for ALL groups. Workers: {effective_num_threads}, Batch: {batch_size}, GenSample: {sample_size}, ValSample: {validation_sample_size}, Retries: {max_regeneration_attempts}")
+        print(f"Starting ES log parsing for ALL groups. Workers: {effective_num_threads}")
 
     try:
         # --- Initialize Dependencies (Common) ---
         logger.info("Initializing components for Elasticsearch parsing...")
         db = ElasticsearchDatabase()
         if db.instance is None:
-             logger.error("Elasticsearch connection failed. Cannot proceed.")
-             print("Error: Could not connect to Elasticsearch.")
-             return
+             logger.error("Elasticsearch connection failed. Cannot proceed."); print("Error: Could not connect to Elasticsearch."); return
 
-        model = GeminiModel()
-        json_file = getattr(args, 'json', None) or ("prompts/test.json" if getattr(args, 'test', False) else "prompts/prompts.json")
-        prompts_manager = PromptsManager(json_file=json_file)
+        model = GeminiModel() # Ensure API key is set
+        json_file_path = getattr(args, 'json', None) or ("prompts/test.json" if getattr(args, 'test', False) else "prompts/prompts.json")
+        prompts_manager = PromptsManager(json_file=json_file_path)
 
         # --- Branch Logic: Single Group vs All Groups ---
 
@@ -75,107 +75,155 @@ def handle_es_parse(args):
             logger.info(f"Instantiating SingleGroupParserAgent for group '{target_group}'")
             agent = SingleGroupParserAgent(model=model, db=db, prompts_manager=prompts_manager)
 
-            # Prepare state for the single group
-            initial_group_state: SingleGroupParserState = {
+            # Prepare the config dictionary for the agent's run method
+            single_group_config: Dict[str, Any] = {
                 "group_name": target_group,
-                "field_to_parse": args.field,
-                "fields_to_copy": args.copy_fields,
+                "field_to_parse": field_to_parse,
+                "fields_to_copy": fields_to_copy,
                 "batch_size": batch_size,
-                "sample_size": sample_size,
-                # Set defaults
-                "group_id_field": None, "group_id_value": None, "source_index": "", "target_index": "",
-                "generated_grok_pattern": None, "parsing_status": "pending", "parsing_result": None
+                "sample_size_generation": sample_size, # Map arg to state key
+                "sample_size_validation": validation_sample_size,
+                "validation_threshold": validation_threshold,
+                "max_regeneration_attempts": max_regeneration_attempts + 1 # Agent expects max *attempts*
             }
 
-            # Run the agent for the single group
-            final_group_state = agent.run(initial_group_state)
+            # Run the agent (which executes its internal graph)
+            final_group_state: SingleGroupParseGraphState = agent.run(single_group_config)
 
-            # Display Summary for single group
+            # --- Display Summary (Single Group - using new state) ---
             print("\n--- Elasticsearch Parsing Summary (Single Group) ---")
-            status = final_group_state.get("parsing_status", "unknown")
-            pattern = final_group_state.get("generated_grok_pattern", "N/A")
-            parse_result = final_group_state.get("parsing_result")
-            processed = parse_result.get("processed_count", 0) if parse_result else 0
-            indexed = parse_result.get("indexed_count", 0) if parse_result else 0
-            errors = parse_result.get("error_count", 0) if parse_result else 0
+            status = final_group_state.get("final_parsing_status", "unknown")
+            parse_result_details = final_group_state.get("final_parsing_results") # Dict from ScrollGrokParserAgent or None
+            error_msgs = final_group_state.get("error_messages", [])
+
+            # Determine pattern used
+            pattern_used = final_group_state.get("current_grok_pattern", "N/A") # Pattern from last step
+            if status == "success_fallback": pattern_used = "Fallback: " + SingleGroupParserAgent.FALLBACK_PATTERN
+            elif status == "failed_fallback": pattern_used = "Fallback FAILED"
+            elif status == "failed (worker critical error)" or status == "failed (agent error)": pattern_used = "Failed before/during parsing"
+            elif not pattern_used or pattern_used == "N/A": pattern_used = "Pattern Generation/Validation Failed"
+
+
+            processed = parse_result_details.get("processed_count", 0) if parse_result_details else 0
+            indexed = parse_result_details.get("indexed_count", 0) if parse_result_details else 0
+            parse_errors = parse_result_details.get("parse_error_count", 0) if parse_result_details else 0
+            index_errors = parse_result_details.get("index_error_count", 0) if parse_result_details else 0
+            total_errors = parse_errors + index_errors
 
             print(f"\nGroup '{target_group}':")
             print(f"  Status: {status}")
-            print(f"  Grok Pattern Used: {pattern}")
-            print(f"  Docs Scanned: {processed}, Docs Indexed: {indexed}, Errors: {errors}")
+            print(f"  Pattern Detail: {pattern_used}")
+            print(f"  Docs Scanned: {processed}, Indexed: {indexed}, Parse Errors: {parse_errors}, Index Errors: {index_errors}")
 
-            if status == "completed" and errors == 0:
-                print("\nResult: SUCCESS")
+            if error_msgs:
+                print("  Agent Errors:")
+                for i, msg in enumerate(error_msgs[:5]): print(f"    - {msg}") # Show first few
+                if len(error_msgs) > 5: print("    ...")
+
+            if status in ["success", "success_fallback"]:
+                 if total_errors == 0 and not error_msgs: print("\nResult: SUCCESS")
+                 else: print("\nResult: COMPLETED WITH ERRORS")
             else:
-                print("\nResult: FAILED (or completed with errors)")
-            logger.info(f"Single group ('{target_group}') parsing finished. Status: {status}")
+                 print("\nResult: FAILED")
+
+            logger.info(f"Single group ('{target_group}') parsing finished. Final Status: {status}")
 
         else:
-            # --- ALL GROUPS Parsing (Existing Logic) ---
+            # --- ALL GROUPS Parsing ---
             logger.info("Instantiating AllGroupsParserAgent")
+            # AllGroupsParserAgent now internally uses the new SingleGroupParserAgent logic via the worker
             agent = AllGroupsParserAgent(model=model, db=db, prompts_manager=prompts_manager)
 
-            initial_state: AllGroupsParserState = {
+            initial_orchestrator_state: AllGroupsParserState = {
                 "group_info_index": cfg.INDEX_GROUP_INFOS,
-                "field_to_parse": args.field,
-                "fields_to_copy": args.copy_fields,
-                "group_results": {},
+                "field_to_parse": field_to_parse,
+                "fields_to_copy": fields_to_copy,
+                "group_results": {}, # Will be populated with SingleGroupParseGraphState
                 "status": "pending"
             }
 
-            # Run the agent for all groups
-            final_state = agent.run(
-                initial_state=initial_state,
-                num_threads=effective_num_threads, # Pass effective number (might be 1)
+            # Run the orchestrator agent, passing necessary parameters for the worker/single agent
+            final_orchestrator_state = agent.run(
+                initial_state=initial_orchestrator_state,
+                num_threads=effective_num_threads,
                 batch_size=batch_size,
-                sample_size=sample_size
+                sample_size=sample_size, # For generation sample size
+                # --- Pass new parameters down ---
+                validation_sample_size=validation_sample_size,
+                validation_threshold=validation_threshold,
+                max_regeneration_attempts=max_regeneration_attempts + 1 # Agent expects max attempts
             )
 
-            # Display Summary for all groups (Existing Logic)
+            # --- Display Summary (All Groups - using new state) ---
             print("\n--- Elasticsearch Parsing Summary (All Groups) ---")
-            if final_state["status"] == "completed":
-                total_groups = len(final_state.get("group_results", {}))
-                successful_groups = 0
-                total_docs_processed = 0
-                total_docs_indexed = 0
-                total_errors = 0
+            if final_orchestrator_state["status"] == "completed":
+                group_results_dict = final_orchestrator_state.get("group_results", {})
+                total_groups = len(group_results_dict)
+                success_count = 0
+                fallback_count = 0
+                error_failure_count = 0
+                total_processed_all = 0
+                total_indexed_all = 0
+                total_parse_errors_all = 0
+                total_index_errors_all = 0
+
                 print(f"Processed {total_groups} groups.")
 
-                for group_name, group_result in final_state.get("group_results", {}).items():
-                     status = group_result.get("parsing_status", "unknown")
-                     pattern = group_result.get("generated_grok_pattern", "N/A")
-                     parse_result = group_result.get("parsing_result")
-                     fallback = group_result.get("fallback_used", False) # Get fallback flag
-                     processed = parse_result.get("processed_count", 0) if parse_result else 0
-                     indexed = parse_result.get("indexed_count", 0) if parse_result else 0
-                     errors = parse_result.get("error_count", 0) if parse_result else 0
+                # Iterate through the results dictionary (key=group_name, value=SingleGroupParseGraphState)
+                for group_name, group_final_state in group_results_dict.items():
+                     status = group_final_state.get("final_parsing_status", "unknown")
+                     parse_result_details = group_final_state.get("final_parsing_results")
+                     error_msgs = group_final_state.get("error_messages", [])
+
+                     # Determine pattern used (similar logic as single group summary)
+                     pattern_used = group_final_state.get("current_grok_pattern", "N/A")
+                     last_failed = group_final_state.get("last_failed_pattern")
+                     fallback_used = "fallback" in status
+
+                     display_pattern = "N/A"
+                     if status == "success": display_pattern = pattern_used
+                     elif status == "success_with_errors": display_pattern = f"{pattern_used} (with errors)"
+                     elif status == "success_fallback": display_pattern = "Fallback: " + SingleGroupParserAgent.FALLBACK_PATTERN
+                     elif status == "failed_fallback": display_pattern = "Fallback FAILED"
+                     elif last_failed : display_pattern = f"Failed after retries (last attempt: {last_failed})"
+                     else: display_pattern = "Pattern Generation/Validation Failed"
+
+
+                     processed = parse_result_details.get("processed_count", 0) if parse_result_details else 0
+                     indexed = parse_result_details.get("indexed_count", 0) if parse_result_details else 0
+                     parse_errors = parse_result_details.get("parse_error_count", 0) if parse_result_details else 0
+                     index_errors = parse_result_details.get("index_error_count", 0) if parse_result_details else 0
 
                      print(f"\nGroup '{group_name}':")
-                     print(f"  Status: {status}{' (Fallback Used)' if fallback else ''}") # Indicate fallback
-                     # Only show generated pattern if fallback wasn't used or it was generated before fallback
-                     if pattern != "N/A" and not fallback:
-                        print(f"  Generated Grok Pattern: {pattern}")
-                     elif fallback:
-                        print(f"  Original Pattern Failed (Fallback: %{{GREEDYDATA:message}})")
-                     else:
-                        print(f"  Pattern Generation Failed") # If pattern is N/A and fallback wasn't explicitly used
+                     print(f"  Status: {status}")
+                     print(f"  Pattern Detail: {display_pattern}")
+                     print(f"  Docs Scanned: {processed}, Indexed: {indexed}, Parse Errors: {parse_errors}, Index Errors: {index_errors}")
+                     if error_msgs:
+                          print(f"  Agent Errors: {len(error_msgs)} (See logs for details)")
 
-                     print(f"  Docs Scanned: {processed}, Docs Indexed: {indexed}, Errors: {errors}")
 
-                     if status == "completed" and errors == 0:
-                          successful_groups += 1
-                     total_docs_processed += processed
-                     total_docs_indexed += indexed
-                     total_errors += errors
+                     # Update overall counters
+                     if status == "success": success_count += 1
+                     elif status == "success_fallback": fallback_count += 1
+                     else: error_failure_count += 1 # Count errors/failures together
+
+                     total_processed_all += processed
+                     total_indexed_all += indexed
+                     total_parse_errors_all += parse_errors
+                     total_index_errors_all += index_errors
 
                 print("\n--- Overall ---")
-                print(f"Successfully Parsed Groups: {successful_groups}/{total_groups}")
-                print(f"Total Documents Scanned (across all groups): {total_docs_processed}")
-                print(f"Total Documents Successfully Indexed: {total_docs_indexed}")
-                print(f"Total Errors (parsing + indexing): {total_errors}")
-            else:
-                print("Overall Status: FAILED")
-                print("Check logs for detailed errors during orchestration or group processing.")
+                print(f"Total Groups Processed: {total_groups}")
+                print(f"  Success (Generated Pattern): {success_count}")
+                print(f"  Success (Fallback Pattern): {fallback_count}")
+                print(f"  Completed with Errors / Failed: {error_failure_count}")
+                print(f"Total Documents Scanned (across all groups): {total_processed_all}")
+                print(f"Total Documents Successfully Indexed: {total_indexed_all}")
+                print(f"Total Parse Errors: {total_parse_errors_all}, Total Index Errors: {total_index_errors_all}")
+
+            else: # Orchestrator status was not 'completed'
+                print("Overall Status: FAILED (Orchestration Error)")
+                print("Check logs for detailed errors during orchestration.")
 
             logger.info("All groups parsing finished.")
 
@@ -190,52 +238,54 @@ def register_es_parse_parser(subparsers):
     """Registers the 'es-parse' command and its arguments."""
     es_parse_parser = subparsers.add_parser(
         'es-parse',
-        help='Parse logs stored in Elasticsearch indices using Grok and index results',
-        description="Retrieves logs from source indices (either all groups or a single specified group), generates Grok patterns via LLM, parses logs, and indexes structured results into target indices."
+        help='Parse logs in ES using Grok (with validation/retry)',
+        description="Retrieves logs from source indices, generates/validates Grok patterns (with retries), parses logs, and indexes results into target indices."
     )
 
-    # --- NEW Argument: Target Group ---
+    # --- Existing Arguments ---
     es_parse_parser.add_argument(
-        '-g', '--group',
-        type=str,
-        default=None, # Default is None, meaning parse all groups
-        help='(Optional) Specify the name of a single group to parse. If omitted, all groups found in the group info index will be processed.'
+        '-g', '--group', type=str, default=None,
+        help='(Optional) Specify a single group name to parse. If omitted, all groups are processed.'
+    )
+    es_parse_parser.add_argument(
+        '-f', '--field', type=str, default='content',
+        help='Source field containing the raw log line (default: content).'
+    )
+    es_parse_parser.add_argument(
+        '--copy-fields', type=str, nargs='*',
+        help='(Optional) Additional source fields to copy to the target document.'
+    )
+    es_parse_parser.add_argument(
+        '-b', '--batch-size', type=int, default=5000, # Keep updated default
+        help='Documents to process/index per batch (default: 5000).'
+    )
+    es_parse_parser.add_argument(
+        '-s', '--sample-size', type=int, default=20, # Keep updated default
+        help='Log lines to sample for LLM Grok pattern generation (default: 20).'
     )
 
+    # --- NEW Arguments for Validation/Retry ---
     es_parse_parser.add_argument(
-        '-f', '--field',
-        type=str,
-        default='content',
-        help='The field in the source documents containing the raw log line to parse (default: content).'
+        '--validation-sample-size', type=int, default=10,
+        help='Number of lines to use for validating a generated Grok pattern (default: 10).'
     )
     es_parse_parser.add_argument(
-        '--copy-fields',
-        type=str,
-        nargs='*',
-        help='(Optional) List of additional fields from the source document to copy to the target parsed document.'
+        '--validation-threshold', type=float, default=0.5,
+        help='Minimum success rate (0.0-1.0) on validation sample to accept Grok pattern (default: 0.5).'
     )
     es_parse_parser.add_argument(
-        '-b', '--batch-size',
-        type=int,
-        default=500,
-        help='Number of documents to process/index per batch (default: 5000).'
-    )
-    es_parse_parser.add_argument(
-        '-s', '--sample-size',
-        type=int,
-        default=10,
-        help='Number of log lines to sample for LLM Grok pattern generation (default: 20).'
+        '--max-retries', type=int, default=4, # Default to 4 retries
+        help='Maximum number of times to retry Grok pattern generation if validation fails (default: 2).'
     )
 
-    # Threads Argument (Still relevant for all-groups parallel mode)
+    # --- Threads Argument (Unchanged) ---
     default_threads = 1
-    try: max_threads = multiprocessing.cpu_count(); max_help = f"Max suggested: {max_threads}."
-    except NotImplementedError: max_threads = 1; max_help = "Cannot determine max CPUs."
-
+    try: max_threads = multiprocessing.cpu_count(); max_help = f"Max suggest: {max_threads}"
+    except NotImplementedError: max_threads = 1; max_help = "Cannot determine max CPUs"
     es_parse_parser.add_argument(
         '-t', '--threads', type=int, default=default_threads,
-        help=f'Number of parallel processes when parsing ALL groups (ignored if --group is specified). Default: {default_threads}. {max_help}'
+        help=f'Parallel workers for ALL groups (ignored for single group). Default: {default_threads}. {max_help}'
     )
 
-    # Set the function to be called
+    # Set the handler function
     es_parse_parser.set_defaults(func=handle_es_parse)
