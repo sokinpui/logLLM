@@ -1,402 +1,208 @@
-# Detailed Documentation of Functions by File
+# Detailed Documentation for `src/logllm/utils/` Modules
 
-## File: `llm_model.py`
+This document provides details on the utility classes and functions located within the `src/logllm/utils/` directory, which support the core functionality of the `logLLM` system.
 
-### Class: `LLMModel`
-- **Purpose**: Abstract base class providing a common interface for language model implementations (e.g., Gemini, Qwen).
+*(Note: `prompts_manager.py` is covered in detail in `doc/prompts_manager.md`)*
+
+---
+
+## File: `src/logllm/utils/llm_model.py`
+
+### Overview
+Defines base classes and specific implementations for interacting with Large Language Models (LLMs). Includes handling for API calls, token counting, and structured output generation.
+
+### Class: `LLMModel(ABC)`
+- **Purpose**: Abstract base class providing a common interface for various LLM implementations (e.g., Gemini).
+- **Key Attributes**: `model`, `embedding`, `context_size`, `rpm_limit`, `min_request_interval`, `_last_api_call_time`.
 - **Key Methods**:
-  - **`__init__(self)`**
-    - **Description**: Initializes the base LLM model with a logger and placeholders for model and embedding objects.
-    - **Parameters**: None
-    - **Returns**: None
-    - **Usage**: Subclasses override this to set up specific model configurations.
-  - **`generate(self, prompt, schema=None)`**
-    - **Description**: Generates a response from the model based on a prompt. Supports structured output if a schema is provided.
-    - **Parameters**:
-      - `prompt` (str): The input text to generate a response for.
-      - `schema` (Optional): A schema for structured output (if supported by the model).
-    - **Returns**: The generated content (str or structured output).
-    - **Usage**: `model.generate("What is the capital of France?")` returns "The capital of France is Paris."
-  - **`token_count(self, prompt: str) -> int`**
-    - **Description**: Counts the number of tokens in a given prompt using the `tiktoken` library.
-    - **Parameters**:
-      - `prompt` (str): The text to tokenize.
-    - **Returns**: Integer number of tokens.
-    - **Usage**: `model.token_count("Hello world")` might return 2.
+  - **`__init__(self)`**: Initializes logger, rate limiting defaults.
+  - **`_wait_for_rate_limit(self)`**: Pauses execution if the time since the last API call is less than the calculated `min_request_interval`.
+  - **`_update_last_call_time(self)`**: Updates the timestamp of the last API call.
+  - **`generate(self, prompt: str, schema: Optional[Type[BaseModel]] = None)`**: Abstract method for generating text or structured output. *Must be implemented by subclasses.*
+  - **`token_count(self, prompt: str | None) -> int`**: Abstract method for counting tokens. *Must be implemented by subclasses.*
 
 ### Class: `GeminiModel(LLMModel)`
-- **Purpose**: Implements the Gemini model from Google Generative AI.
+- **Purpose**: Implements interaction with Google's Gemini models using the direct `google-generativeai` SDK.
 - **Key Methods**:
-  - **`__init__(self)`**
-    - **Description**: Initializes the Gemini model with a specified context size (100,000 tokens) and API key from environment variables.
-    - **Parameters**: None
-    - **Returns**: None
-    - **Usage**: Requires `GENAI_API_KEY` to be set in the environment.
-  - **`token_count(self, prompt: str | None) -> int`**
-    - **Description**: Overrides base method to use Gemini-specific tokenizer.
-    - **Parameters**:
-      - `prompt` (str | None): Text to count tokens for; returns 0 if None.
-    - **Returns**: Total token count.
-    - **Usage**: `gemini.token_count("Test prompt")` returns the token count specific to Gemini's tokenizer.
-  - **`generate(self, prompt, schema=None)`**
-    - **Description**: Extends base method with a 5-second delay (possibly for rate limiting).
-    - **Parameters**: Same as base `generate`.
-    - **Returns**: Generated content.
-    - **Usage**: Adds a delay to base generation logic.
+  - **`__init__(self, model_name: str | None = None)`**:
+    - Initializes the connection to the Gemini API using `GENAI_API_KEY` environment variable.
+    - Sets the `model_name` (defaults to `cfg.GEMINI_LLM_MODEL`).
+    - Configures rate limiting (`rpm_limit`, `min_request_interval`) based on the specific Gemini model using `MODEL_RPM_LIMITS`.
+    - Initializes `genai.GenerativeModel` for generation and `GoogleGenerativeAIEmbeddings` (from Langchain) for embeddings.
+  - **`token_count(self, prompt: str | None) -> int`**: Implements token counting using `self.model.count_tokens()`. Includes basic fallback estimate.
+  - **`generate(self, prompt: str, schema: Optional[Type[BaseModel]] = None)`**:
+    - Implements generation using `self.model.generate_content()`.
+    - Applies rate limiting (`_wait_for_rate_limit`).
+    - If `schema` (Pydantic model) is provided:
+        - Converts the schema to a Google API `Tool` using `pydantic_to_google_tool`.
+        - Instructs the model to use the tool (`function_calling_config`).
+        - Parses the model's function call response, validates against the schema, and returns the Pydantic object. Includes fixes for handling the response arguments.
+    - If no schema or function call fails/is absent, returns the text content (`response.text`).
+    - Includes error handling for API errors, validation errors, and safety blocking.
 
-### Class: `QwenModel(LLMModel)`
-- **Purpose**: Implements the Qwen model using LlamaCpp for local execution.
-- **Key Methods**:
-  - **`__init__(self)`**
-    - **Description**: Initializes the Qwen model with a specific model file path and a large context size (128,000 tokens).
-    - **Parameters**: None
-    - **Returns**: None
-    - **Usage**: Loads a pre-trained Qwen model from `./models/qwen/qwen2.5-7b-instruct-1m-q4_k_m.gguf`.
-  - **`token_count(self, text: str | None) -> int`**
-    - **Description**: Counts tokens using the LlamaCpp tokenizer.
-    - **Parameters**:
-      - `text` (str | None): Text to tokenize; returns 0 if None.
-    - **Returns**: Token count.
-    - **Usage**: `qwen.token_count("Sample text")` returns token count based on Qwen's tokenization.
-  - **`generate(self, prompt, schema=None)`**
-    - **Description**: Generates a response using the Qwen model.
-    - **Parameters**: Same as base `generate`.
-    - **Returns**: Generated content.
-    - **Usage**: `qwen.generate("What is AI?")` invokes the Qwen model for a response.
+- **Utility Function**: **`pydantic_to_google_tool(pydantic_model: Type[BaseModel]) -> Tool`**:
+  - Converts a Pydantic model into a `google.ai.generativelanguage.Tool` object compatible with the Gemini API's function calling feature. Handles type mapping and schema properties.
 
 ---
 
-## File: `data_struct.py`
+## File: `src/logllm/utils/data_struct.py`
+
+### Overview
+Defines `dataclasses` used throughout the application to structure log-related data and facilitate conversion to dictionaries (e.g., for database storage).
 
 ### Class: `BaseData`
-- **Purpose**: Base dataclass for converting objects to dictionaries.
-- **Key Methods**:
-  - **`to_dict(self)`**
-    - **Description**: Converts the dataclass instance to a dictionary.
-    - **Parameters**: None
-    - **Returns**: dict
-    - **Usage**: Used by subclasses for serialization.
+- **Purpose**: Simple base class providing a `to_dict` method using `dataclasses.asdict`.
 
 ### Class: `LineOfLogFile(BaseData)`
-- **Purpose**: Represents a single line in a log file.
-- **Fields**:
-  - `content` (str): Line content.
-  - `line_number` (int): Line number in the file.
-  - `name` (str): File name.
-  - `id` (int): File ID.
-  - `timestamp` (datetime): When the line was recorded.
-- **Key Methods**:
-  - **`to_dict(self)`**
-    - **Description**: Converts to a dictionary, formatting `timestamp` as ISO 8601 string.
-    - **Returns**: dict
-    - **Usage**: `line.to_dict()` for database insertion.
+- **Purpose**: Represents a single line from a log file with metadata.
+- **Fields**: `content` (str), `line_number` (int), `name` (str: file path), `id` (int: file ID), `timestamp` (datetime).
+- **`to_dict(self)`**: Overrides base to convert `timestamp` field to ISO 8601 string format.
 
 ### Class: `LastLineRead(BaseData)`
-- **Purpose**: Tracks the last line read for a log file.
-- **Fields**:
-  - `last_line_read` (int): Last line number processed.
-  - `id` (int): File ID.
-  - `name` (str): File name.
+- **Purpose**: Represents the state of processing for a log file, tracking the last line number read.
+- **Fields**: `last_line_read` (int), `id` (int: file ID), `name` (str: file path).
 
 ### Class: `LogFile`
-- **Purpose**: Represents a log file with metadata and database interaction methods.
+- **Purpose**: Represents a log file, managing its metadata and providing methods for interacting with its stored data in Elasticsearch.
+- **Attributes**: `id` (int: unique file ID), `belongs_to` (str: parent group name), `path` (str), `description` (str), `related_events` (list).
 - **Key Methods**:
-  - **`__init__(self, filename: str, parent: str)`**
-    - **Description**: Initializes a log file with a unique ID.
-    - **Parameters**:
-      - `filename` (str): Path to the log file.
-      - `parent` (str): Parent directory or group name.
-    - **Usage**: `log = LogFile("/path/to/log.txt", "group1")`
-  - **`add_file_description(self, description: str)`**
-    - **Description**: Adds a description to the log file.
-    - **Parameters**:
-      - `description` (str): Description text.
-    - **Usage**: `log.add_file_description("System logs")`
-  - **`to_dict(self) -> dict`**
-    - **Description**: Serializes the log file to a dictionary.
-    - **Returns**: dict
-    - **Usage**: For database storage.
-  - **`get_total_lines(self, db: eldb) -> int`**
-    - **Description**: Queries Elasticsearch for the total number of lines stored for this file.
-    - **Parameters**:
-      - `db` (ElasticsearchDatabase): Database instance.
-    - **Returns**: Integer count of lines.
-    - **Usage**: `log.get_total_lines(db)` to check stored line count.
-  - **`get_snapshot(self, id: int, earliest_timestamp: datetime, start: int, size: int, db: eldb) -> str | None`**
-    - **Description**: Retrieves a snapshot of log lines from Elasticsearch, sorted by line number.
-    - **Parameters**:
-      - `id` (int): File ID.
-      - `earliest_timestamp` (datetime): Filter logs after this time.
-      - `start` (int): Starting line number.
-      - `size` (int): Number of lines to retrieve.
-      - `db` (ElasticsearchDatabase): Database instance.
-    - **Returns**: String of formatted log lines or None if empty.
-    - **Usage**: `log.get_snapshot(1, datetime(2023, 1, 1), 10, 5, db)` gets 5 lines starting at line 10.
+  - **`__init__(self, filename: str, parent: str)`**: Assigns a unique ID and stores path/parent info.
+  - **`add_file_description(self, description: str)`**: Adds a textual description.
+  - **`to_dict(self) -> dict`**: Returns the instance's attributes as a dictionary.
+  - **`get_total_lines(self, db: ElasticsearchDatabase) -> int`**: Queries ES to count the number of stored lines for this file ID.
+  - **`get_snapshot(self, id: int, earliest_timestamp: datetime, start: int, size: int, db: ElasticsearchDatabase) -> str | None`**: Retrieves a segment of log lines from ES for this file ID, filtering by timestamp and selecting by line number range. Uses the scroll API for efficiency.
 
 ### Class: `Event`
-- **Purpose**: Represents an event with a description and related files.
+- **Purpose**: Represents a conceptual event derived from logs or user input.
+- **Attributes**: `id` (int: unique event ID), `description` (str), `related_files` (list).
 - **Key Methods**:
-  - **`__init__(self, description: str)`**
-    - **Description**: Initializes an event with a unique ID.
-    - **Parameters**:
-      - `description` (str): Event description.
-    - **Usage**: `event = Event("Server crash at 3 PM")`
-  - **`to_dict(self) -> dict`**
-    - **Description**: Serializes the event to a dictionary.
-    - **Returns**: dict
-    - **Usage**: For database storage.
+  - **`__init__(self, description: str)`**: Assigns a unique ID.
+  - **`to_dict(self) -> dict`**: Returns the instance's attributes as a dictionary.
 
 ---
 
-## File: `database.py`
+## File: `src/logllm/utils/database.py`
+
+### Overview
+Provides an abstraction layer for database operations, with a concrete implementation for Elasticsearch.
 
 ### Class: `Database(ABC)`
-- **Purpose**: Abstract base class defining database operations.
-- **Abstract Methods**:
-  - **`insert`, `single_search`, `update`, `delete`, `set_vector_store`**
+- **Purpose**: Abstract base class defining the required methods for any database implementation.
+- **Abstract Methods**: `insert`, `single_search`, `update`, `delete`, `set_vector_store`.
 
 ### Class: `ElasticsearchDatabase(Database)`
-- **Purpose**: Implements database operations using Elasticsearch.
+- **Purpose**: Implements the `Database` interface using the `elasticsearch-py` library.
 - **Key Methods**:
-  - **`__init__(self)`**
-    - **Description**: Initializes the Elasticsearch client with a connection check.
-    - **Usage**: `db = ElasticsearchDatabase()`
-  - **`insert(self, data: dict, index: str)`**
-    - **Description**: Inserts a document into the specified index.
-    - **Parameters**:
-      - `data` (dict): Document to insert.
-      - `index` (str): Target index.
-    - **Usage**: `db.insert({"content": "log line"}, "log_files")`
-  - **`single_search(self, query: dict, index: str)`**
-    - **Description**: Performs a single-result search.
-    - **Parameters**:
-      - `query` (dict): Elasticsearch query.
-      - `index` (str): Target index.
-    - **Returns**: List of hits (limited to 1).
-    - **Usage**: `db.single_search({"match": {"id": 1}}, "log_files")`
-  - **`scroll_search(self, query: dict, index: str)`**
-    - **Description**: Retrieves all results using Elasticsearch’s Scroll API.
-    - **Parameters**: Same as `single_search`.
-    - **Returns**: List of all matching hits.
-    - **Usage**: For large datasets, e.g., `db.scroll_search({"match_all": {}}, "log_files")`
-  - **`update(self, id: str, data: dict, index: str)`**
-    - **Description**: Updates a document by ID.
-    - **Parameters**:
-      - `id` (str): Document ID.
-      - `data` (dict): Update data.
-      - `index` (str): Target index.
-    - **Usage**: `db.update("1", {"doc": {"content": "updated"}}, "log_files")`
-  - **`delete(self, id: str, index: str)`**
-    - **Description**: Deletes a document by ID.
-    - **Parameters**: Same as `update`.
-    - **Usage**: `db.delete("1", "log_files")`
-  - **`set_vector_store(self, embeddings, index)`**
-    - **Description**: Sets up a vector store for embeddings.
-    - **Parameters**:
-      - `embeddings`: Embedding model.
-      - `index` (str): Index for the vector store.
-    - **Returns**: `ElasticsearchStore` instance.
-    - **Usage**: `db.set_vector_store(embeddings, "vector_store")`
-  - **`random_sample(self, index: str, size: int)`**
-    - **Description**: Returns a random sample of documents.
-    - **Parameters**:
-      - `index` (str): Target index.
-      - `size` (int): Number of documents (max 10,000).
-    - **Returns**: List of hits.
-    - **Usage**: `db.random_sample("log_files", 100)`
-  - **`add_alias(self, index: str, alias: str, filter: dict = None)`**
-    - **Description**: Adds an alias to an index with an optional filter and returns document count.
-    - **Parameters**:
-      - `index` (str): Source index.
-      - `alias` (str): Alias name.
-      - `filter` (dict, optional): Filter for the alias.
-    - **Returns**: Integer count of matching documents.
-    - **Usage**: `db.add_alias("log_files", "recent_logs", {"range": {"timestamp": {"gte": "2023-01-01"}}})`
-  - **`count_docs(self, index: str, filter: dict = None)`**
-    - **Description**: Counts documents matching a filter.
-    - **Parameters**: Same as `add_alias`.
-    - **Returns**: Integer count.
-    - **Usage**: `db.count_docs("log_files")`
-  - **`get_unique_values_composite(self, index: str, field: str, page_size=1000, sort_order="asc")`**
-    - **Description**: Retrieves all unique values for a field using composite aggregation.
-    - **Parameters**:
-      - `index` (str): Target index.
-      - `field` (str): Field to analyze.
-      - `page_size` (int): Pagination size.
-      - `sort_order` (str): "asc" or "desc".
-    - **Returns**: List of unique values.
-    - **Usage**: `db.get_unique_values_composite("log_files", "name")`
-  - **`get_unique_values(self, index: str, field: str, size=1000, sort_order="asc")`**
-    - **Description**: Retrieves unique values using terms aggregation (limited to `size`).
-    - **Parameters**: Similar to `get_unique_values_composite`.
-    - **Returns**: List of unique values.
-    - **Usage**: `db.get_unique_values("log_files", "name", 500)`
+  - **`__init__(self)`**: Initializes the `Elasticsearch` client, checks connection to `cfg.ELASTIC_SEARCH_URL`. Stores the client instance in `self.instance`.
+  - **`insert(self, data: dict, index: str)`**: Inserts a document into the specified index.
+  - **`single_search(self, query: dict, index: str)`**: Executes a search query and returns only the first hit.
+  - **`scroll_search(self, query: dict, index: str)`**: Retrieves *all* documents matching a query using the Elasticsearch Scroll API, handling pagination automatically.
+  - **`update(self, id: str, data: dict, index: str)`**: Updates an existing document by its ID.
+  - **`delete(self, id: str, index: str)`**: Deletes a document by its ID.
+  - **`set_vector_store(self, embeddings, index) -> ElasticsearchStore`**: Configures and returns a `langchain_elasticsearch.ElasticsearchStore` instance for vector similarity searches.
+  - **`random_sample(self, index: str, size: int)`**: Retrieves a random sample of documents using `function_score` with `random_score`.
+  - **`add_alias(self, index: str, alias: str, filter: dict = None)`**: Adds an alias to an index, optionally with a filter, and returns the count of documents matching the filter.
+  - **`count_docs(self, index: str, filter: dict = None)`**: Returns the count of documents in an index, optionally matching a filter.
+  - **`get_unique_values_composite(...)`**: Retrieves unique values using composite aggregation (handles pagination for large cardinality fields).
+  - **`get_unique_values(...)`**: Retrieves unique values using terms aggregation (simpler but potentially limited by `size`).
+  - **`scroll_and_process_batches(...)`**: Scrolls through documents matching a query and processes them in batches using a provided callback function (`process_batch_func`). Efficient for large-scale processing tasks. Returns total processed count and estimated total hits.
+  - **`bulk_operation(...) -> Tuple[int, List[Dict]]`**: Performs bulk operations (index, update, delete) using pre-formatted actions following the Elasticsearch bulk API syntax. Uses `elasticsearch.helpers.bulk`. Returns success count and list of errors.
+  - **`bulk_index(...)`**: [DEPRECATED] Simple bulk indexing wrapper; `bulk_operation` is preferred.
+  - **`get_sample_lines(...) -> List[str]`**: Retrieves a random sample of values from a *specific field* within documents matching an optional query. Uses `function_score`.
 
 ---
 
-## File: `container_manger.py`
+## File: `src/logllm/utils/container_manager.py`
+
+### Overview
+Manages Docker containers, primarily for setting up the Elasticsearch and Kibana environment. Includes logic for handling different operating systems (macOS via Colima, Linux, basic Windows check).
 
 ### Class: `ContainerManager(ABC)`
 - **Purpose**: Abstract base class for container management.
+- **Abstract Methods**: `remove_container` (and potentially others like start, stop, status if formalized).
 
 ### Class: `DockerManager(ContainerManager)`
-- **Purpose**: Manages Docker containers for services like Elasticsearch and Kibana.
+- **Purpose**: Concrete implementation using `docker-py` to interact with the Docker daemon.
 - **Key Methods**:
-  - **`__init__(self)`**
-    - **Description**: Initializes the Docker client.
-    - **Usage**: `manager = DockerManager()`
-  - **`start_container(self, name: str, image: str, network: str, volume_setup: dict, ports: dict, env_vars: dict, detach: bool, remove: bool)`**
-    - **Description**: Starts a Docker container with specified configurations.
-    - **Parameters**:
-      - `name` (str): Container name.
-      - `image` (str): Docker image.
-      - `network` (str): Network name.
-      - `volume_setup` (dict): Volume bindings.
-      - `ports` (dict): Port mappings.
-      - `env_vars` (dict): Environment variables.
-      - `detach` (bool): Run in detached mode.
-      - `remove` (bool): Auto-remove on stop.
-    - **Returns**: Container ID or None on failure.
-    - **Usage**: Starts Elasticsearch or Kibana containers.
-  - **`stop_container(self)`**
-    - **Description**: Placeholder for stopping a container (not implemented).
-    - **Usage**: Needs implementation.
-  - **`get_container_status(self)`**
-    - **Description**: Placeholder for checking container status (not implemented).
-    - **Usage**: Needs implementation.
-  - **`_remove_container(self, container_name: str)`**
-    - **Description**: Removes a container by name if it exists.
-    - **Parameters**:
-      - `container_name` (str): Name of the container.
-    - **Usage**: Cleans up before starting a new container.
-  - **`_create_network(self, network_name: str)`**
-    - **Description**: Creates a Docker network if it doesn’t exist.
-    - **Parameters**:
-      - `network_name` (str): Network name.
-    - **Usage**: Ensures network availability.
-  - **`_create_volume(self, volume_name: str)`**
-    - **Description**: Creates a Docker volume if it doesn’t exist.
-    - **Parameters**:
-      - `volume_name` (str): Volume name.
-    - **Usage**: Sets up persistent storage.
-  - **`_pull_image(self, image: str)`**
-    - **Description**: Pulls a Docker image if not present locally.
-    - **Parameters**:
-      - `image` (str): Image name (e.g., "elasticsearch:8.17.1").
-    - **Usage**: Ensures the image is available.
-  - **`_start_daemon(self)`**
-    - **Description**: Starts the Docker daemon (supports macOS with Colima).
-    - **Returns**: Docker client instance.
-    - **Usage**: Configures Docker environment based on OS.
+  - **`__init__(self)`**: Initializes logger. Client is initialized lazily by `_ensure_client`.
+  - **`_ensure_client(self, memory_gb: Optional[int] = None) -> bool`**: Checks if the client is initialized. If not, calls `_start_daemon` (passing `memory_gb`). Returns `True` if client is ready.
+  - **`_start_daemon(self, memory_gb: Optional[int] = None) -> Optional[docker.client.DockerClient]`**: Detects OS. On macOS, checks Colima status, starts it if necessary (using `memory_gb` or `cfg.COLIMA_MEMORY_SIZE`), sets `DOCKER_HOST`, and returns a client. On Linux/Windows, attempts direct connection assuming daemon/Desktop is running.
+  - **`start_container(self, name: str, image: str, ..., memory_gb: int = 4) -> Optional[str]`**: Starts a container. Ensures client is ready via `_ensure_client` (passing `memory_gb`), removes existing container with the same name, pulls image if needed, creates network/volume if needed (via internal methods), and runs the container. Returns container ID or `None`.
+  - **`stop_container(self, name: str) -> bool`**: Stops a running container by name.
+  - **`remove_container(self, name: str) -> bool`**: Forcefully removes a container by name.
+  - **`get_container_status(self, name: str) -> str`**: Returns the status ('running', 'exited', 'not found', 'error') of a container.
+  - **`_remove_container_if_exists(self, container_name: str)`**: Helper to stop and remove a container by name if it exists.
+  - **`_create_network(self, network_name: str)`**: Creates Docker network if it doesn't exist.
+  - **`_create_volume(self, volume_name: str)`**: Creates Docker volume if it doesn't exist.
+  - **`_pull_image(self, image: str) -> None`**: Pulls Docker image if not found locally.
 
 ---
 
-## File: `logger.py`
+## File: `src/logllm/utils/logger.py`
+
+### Overview
+Provides a singleton `Logger` class for consistent logging across the application.
 
 ### Class: `Logger`
-- **Purpose**: Singleton class for logging to file and console.
-- **Key Methods**:
-  - **`__init__(self, name: str = cfg.LOGGER_NAME, log_file: str = cfg.LOG_FILE)`**
-    - **Description**: Initializes logging with DEBUG level to file and INFO to console.
-    - **Parameters**:
-      - `name` (str): Logger name.
-      - `log_file` (str): Log file path.
-    - **Usage**: `logger = Logger()`
-  - **`info(self, message: str)`**, **`debug(self, message: str)`**, **`warning(self, message: str)`**, **`error(self, message: str)`**, **`critical(self, message: str)`**
-    - **Description**: Logs messages at respective levels.
-    - **Parameters**:
-      - `message` (str): Log message.
-    - **Usage**: `logger.info("Process started")`
+- **Purpose**: Singleton logger setup using Python's `logging` module. Configures handlers for console output (INFO level) and rotating file output (DEBUG level).
+- **`__new__(cls, *args, **kwargs)`**: Ensures only one instance of the logger is created (Singleton pattern).
+- **`__init__(self, name: str = cfg.LOGGER_NAME, log_file: str = cfg.LOG_FILE)`**: Initializes the logger (only runs once per instance). Sets up a `StreamHandler` (console) and `RotatingFileHandler` (file) with a detailed formatter. Creates log directory if needed.
+- **Logging Methods** (`info`, `debug`, `warning`, `error`, `critical`, `exception`): Wrapper methods that call the corresponding methods on the underlying `logging.Logger` instance. They accept `*args` and `**kwargs` for flexible message formatting and logging options (like `exc_info=True`).
 
 ---
 
-## File: `collector.py`
+## File: `src/logllm/utils/collector.py`
+
+### Overview
+Handles the discovery and ingestion of log files from a specified directory into Elasticsearch.
 
 ### Class: `Collector`
-- **Purpose**: Collects log files and events, inserting them into Elasticsearch.
+- **Purpose**: Scans directories for `.log` files, groups them by parent directory, stores group information in ES, and ingests log lines into group-specific ES indices.
 - **Key Methods**:
-  - **`__init__(self, dir: str)`**
-    - **Description**: Initializes with a directory to collect logs from.
-    - **Parameters**:
-      - `dir` (str): Directory path.
-    - **Usage**: `collector = Collector("../logs/")`
-  - **`collect_logs(self, directory: str) -> list[LogFile]`**
-    - **Description**: Recursively collects log files, skipping hidden files.
-    - **Parameters**:
-      - `directory` (str): Root directory.
-    - **Returns**: List of `LogFile` objects.
-    - **Usage**: Gathers all logs in a directory tree.
-  - **`collect_events(self, file: str) -> list[Event]`**
-    - **Description**: Reads events from a file, splitting by empty lines.
-    - **Parameters**:
-      - `file` (str): Event file path.
-    - **Returns**: List of `Event` objects.
-    - **Usage**: `events = collector.collect_events("events.txt")`
-  - **`insert_events_to_db(self, db: Database, events: list[Event])`**
-    - **Description**: Inserts events into Elasticsearch, clearing old records first.
-    - **Parameters**:
-      - `db` (Database): Database instance.
-      - `events` (list[Event]): Events to insert.
-    - **Usage**: Stores event data.
-  - **`insert_logs_to_db(self, db: Database, files: list)`**
-    - **Description**: Inserts log lines into Elasticsearch, tracking last read line (memory-intensive).
-    - **Parameters**:
-      - `db` (Database): Database instance.
-      - `files` (list): List of log files.
-    - **Usage**: For smaller log files; loads entire file into memory.
-  - **`insert_very_large_logs_into_db(self, db: ElasticsearchDatabase, files: list[LogFile])`**
-    - **Description**: Efficiently inserts large log files using bulk operations, supporting appends.
-    - **Parameters**: Same as `insert_logs_to_db`.
-    - **Usage**: Preferred for large logs; processes in batches of 1000 lines.
-  - **`_get_last_line_read(self, log_file: LogFile, db: Database) -> int`**
-    - **Description**: Retrieves the last line read for a log file.
-    - **Parameters**:
-      - `log_file` (LogFile): Log file object.
-      - `db` (Database): Database instance.
-    - **Returns**: Last line number or 0 if not found.
-    - **Usage**: Ensures incremental processing.
-  - **`_save_last_line_read(self, log_file: LogFile, db: Database, line_number: int)`**
-    - **Description**: Saves the last line read to the database.
-    - **Parameters**:
-      - `log_file` (LogFile): Log file object.
-      - `db` (Database): Database instance.
-      - `line_number` (int): Line number to save.
-    - **Usage**: Updates tracking information.
+  - **`__init__(self, dir: str)`**: Initializes the collector, scans the directory (`collect_logs`), groups the files (`group_files`), and inserts group info into ES (`insert_group_to_db`).
+  - **`collect_logs(self, directory: str) -> list[LogFile]`**: Recursively finds `.log` files in the specified directory, creating `LogFile` objects with parent group information.
+  - **`group_files(self, files: list[LogFile]) -> dict[str, list[str]]`**: Groups the collected `LogFile` objects by their `belongs_to` attribute (parent directory name).
+  - **`insert_group_to_db(self, groups: dict[str, list[str]], db: Database)`**: Clears and inserts the group name to file path mappings into the `cfg.INDEX_GROUP_INFOS` index in Elasticsearch.
+  - **`collect_events(self, file: str) -> list[Event]`**: Reads event descriptions from a text file (split by blank lines).
+  - **`insert_events_to_db(self, db: Database, events: list[Event])`**: Inserts `Event` objects into the `cfg.INDEX_EVENTS_STORAGE` index.
+  - **`insert_logs_to_db(self, db: Database, files: list)`**: [Less efficient] Inserts logs line-by-line, potentially loading whole files into memory. Tracks progress using `_get/save_last_line_read`.
+  - **`insert_very_large_logs_into_db(self, db: ElasticsearchDatabase, files: list[LogFile])`**: **Preferred method.** Efficiently inserts log lines in batches using `elasticsearch.helpers.bulk`. Reads files line-by-line, respects `_get/save_last_line_read` for incremental updates. Inserts into group-specific indices obtained via `cfg.get_log_storage_index(group_name)`.
+  - **`_get_last_line_read(...) -> int`**: Retrieves the last processed line number for a file from `cfg.INDEX_LAST_LINE_STATUS`.
+  - **`_save_last_line_read(...)`**: Updates the last processed line number for a file in `cfg.INDEX_LAST_LINE_STATUS` using an upsert operation.
+  - **`_clear_records(self, db: Database)`**: Utility to delete log storage and status indices (for cleanup/reset).
 
 ---
 
-## File: `rag_manager.py`
+## File: `src/logllm/utils/rag_manager.py`
+
+### Overview
+Manages Retrieval-Augmented Generation (RAG) capabilities, using Elasticsearch as a vector store for document embeddings.
 
 ### Class: `RAGManager`
-- **Purpose**: Manages Retrieval-Augmented Generation (RAG) for document context.
+- **Purpose**: Loads documents, splits them, creates embeddings, stores them in an Elasticsearch vector index, and retrieves relevant document chunks based on a query to provide context to an LLM.
 - **Key Methods**:
-  - **`__init__(self, name: str, db: ElasticsearchDatabase, embeddings, model: LLMModel, multi_threading: bool = False)`**
-    - **Description**: Initializes RAG with a vector store in Elasticsearch.
-    - **Parameters**:
-      - `name` (str): Identifier for this RAG instance.
-      - `db` (ElasticsearchDatabase): Database instance.
-      - `embeddings`: Embedding model.
-      - `model` (LLMModel): Language model.
-      - `multi_threading` (bool): Enable multi-threaded loading.
-    - **Usage**: `rag = RAGManager("docs", db, embeddings, model)`
-  - **`retrieve(self, prompt: str) -> str`**
-    - **Description**: Retrieves relevant documents and constructs a contextual prompt.
-    - **Parameters**:
-      - `prompt` (str): Query to retrieve context for.
-    - **Returns**: Contextual prompt string.
-    - **Usage**: `rag.retrieve("What is AI?")` returns prompt with relevant context.
-  - **`update_rag_from_directory(self, directory: str, db: ElasticsearchDatabase, file_extension: str = "md")`**
-    - **Description**: Updates the vector store with documents from a directory.
-    - **Parameters**:
-      - `directory` (str): Directory path.
-      - `db` (ElasticsearchDatabase): Database instance.
-      - `file_extension` (str): File type to load (default "md").
-    - **Usage**: `rag.update_rag_from_directory("./docs/", db)` loads markdown files.
+  - **`__init__(self, name: str, db: ElasticsearchDatabase, embeddings, model: LLMModel, multi_threading: bool = False)`**: Initializes the manager, setting up the `ElasticsearchStore` connected to a specific index (`cfg.INDEX_VECTOR_STORE + "_" + name`).
+  - **`retrieve(self, prompt: str) -> str`**: Performs a similarity search in the vector store based on the `prompt`, retrieves top N documents, formats their content, and embeds it into a contextual prompt template (`prompts.rag.prompt`).
+  - **`update_rag_from_directory(self, directory: str, db: ElasticsearchDatabase, file_extension: str = "md")`**: Clears the existing vector index, loads documents from the specified `directory` (using `DirectoryLoader`), splits them into chunks (using `RecursiveCharacterTextSplitter`), generates embeddings, and indexes the chunks into the Elasticsearch vector store.
+  - **`_load_from_directory(...)`**: Internal helper called by `update_rag_from_directory` to handle loading, splitting, and indexing documents.
 
 ---
 
-## Usage Notes
-- **Dependencies**: Ensure Elasticsearch, Docker, and required Python libraries (`langchain`, `tiktoken`, etc.) are installed.
-- **Configuration**: Adjust `config.py` settings (e.g., API keys, paths) before running.
-- **Scalability**: Use `insert_very_large_logs_into_db` for large logs to avoid memory issues.
-- **Error Handling**: Most methods include logging and exit on critical errors; handle exceptions as needed in production.
+## File: `src/logllm/utils/chunk_manager.py`
+
+### Overview
+Utility class designed to fetch large amounts of text data (like log lines associated with an event or file) from Elasticsearch and serve it in manageable chunks that respect LLM token limits.
+
+### Class: `ESTextChunkManager`
+- **Purpose**: Given an identifier (like a file ID or event ID), fetches all associated documents from a specified ES index, and provides methods to iterate through the content field (`field`) of these documents in chunks, ensuring each chunk's token count (calculated via `len_fn`) does not exceed `max_len`.
+- **Key Methods**:
+  - **`__init__(self, id: Any, field: str, index: str, db: ElasticsearchDatabase)`**: Initializes by fetching *all* relevant hits using `_get_all_hits` (which uses `db.scroll_search`).
+  - **`get_next_chunk(self, max_len: int, len_fn: Callable[[str], int]) -> str`**: Returns the next chunk of aggregated text content. Internally uses `_build_chunk` which dynamically adjusts how many hits' content are combined to stay under `max_len`. Updates internal pointers. Returns empty string when done.
+  - **`is_end(self) -> bool`**: Returns `True` if all fetched hits have been processed into chunks.
+  - **`get_current_chunk(self) -> str | None`**: Returns the last chunk generated by `get_next_chunk`.
+  - **`_get_all_hits() -> list`**: Fetches all documents matching the ID using scrolling.
+  - **`_build_chunk(...) -> str`**: Iteratively adds content from hits to the chunk, adjusting the number added per step based on token limits.
+
+---
+These descriptions cover the primary roles and key methods of the utility classes within the `src/logllm/utils/` directory, reflecting the latest code provided.
+
