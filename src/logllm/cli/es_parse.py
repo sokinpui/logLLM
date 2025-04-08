@@ -45,7 +45,7 @@ def handle_es_parse(args):
 
     # --- Validate Inputs ---
     if num_threads < 1: num_threads = 1
-    if batch_size < 1: batch_size = 5000
+    if batch_size < 1: batch_size = 1000
     if sample_size < 1: sample_size = 10
     if validation_sample_size < 1: validation_sample_size = 10
     if not (0.0 <= validation_threshold <= 1.0): validation_threshold = 0.5
@@ -442,8 +442,8 @@ def register_es_parse_parser(subparsers):
     )
 
     run_parser.add_argument(
-            '-b', '--batch-size', type=int, default=5000,
-            help='Documents to process/index per batch (default: 5000).'
+            '-b', '--batch-size', type=int, default=1000,
+            help='Documents to process/index per batch (default: 1000).'
     )
 
     run_parser.add_argument(
