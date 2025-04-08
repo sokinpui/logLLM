@@ -61,6 +61,7 @@ class SingleGroupParseGraphState(TypedDict):
     batch_size: int
     max_regeneration_attempts: int
     keep_unparsed_index: bool
+    provided_grok_pattern: Optional[str] # Renamed from initial config for clarity
 
     # Dynamic state during run
     current_attempt: int
@@ -126,8 +127,10 @@ def _parallel_group_worker_new(
              "sample_size_generation": single_group_config.get('sample_size_generation', 20),
              "sample_size_validation": single_group_config.get('sample_size_validation', 10),
              "validation_threshold": single_group_config.get('validation_threshold', 0.5),
-             "batch_size": single_group_config.get('batch_size', 5000),
+             "batch_size": single_group_config.get('batch_size', 1000),
              "max_regeneration_attempts": single_group_config.get('max_regeneration_attempts', 3),
+             "keep_unparsed_index": single_group_config.get("keep_unparsed_index", False), # Include this
+             "provided_grok_pattern": single_group_config.get("provided_grok_pattern"),   # Include this
              "current_attempt": 0,
              "current_grok_pattern": None,
              "last_failed_pattern": None,
@@ -150,7 +153,7 @@ class ScrollGrokParserAgent:
         self._db = db
         self._logger = Logger()
         self._grok_instance: Optional[Grok] = None
-        self._batch_size_this_run: int = 5000
+        self._batch_size_this_run: int = 1000
         # Reset counters within run()
 
     def _initialize_grok(self, pattern: str) -> bool:
@@ -390,13 +393,15 @@ class SingleGroupParserAgent:
         # Build and compile the graph
         self.graph = self._build_graph()
 
-    # --- Graph Nodes (Updated) ---
+    # --- Graph Nodes ---
 
     def _start_node(self, state: SingleGroupParseGraphState) -> SingleGroupParseGraphState | Dict[str, Any]:
         """Initializes indices, clears failed index, fetches samples."""
         group_name = state['group_name']
         keep_unparsed_index = state.get('keep_unparsed_index', False) # Get the flag
+        provided_pattern = state.get('provided_grok_pattern')  # Retrieve provided pattern from the *initial* state
         self._logger.info(f"[{group_name}] Starting graph run...")
+
         errors = []
         source_index = ""
         target_index = ""
@@ -411,16 +416,6 @@ class SingleGroupParserAgent:
 
             self._logger.info(f"[{group_name}] Indices: Source='{source_index}', Target='{target_index}', Failed='{failed_index}'")
 
-            # --- Clear the FAILED index for this group ---
-            try:
-                 self._logger.info(f"[{group_name}] Attempting to delete existing failed index: {failed_index}")
-                 delete_resp = self._db.instance.indices.delete(index=failed_index, ignore=[400, 404])
-                 self._logger.info(f"[{group_name}] Delete response for {failed_index}: {delete_resp}")
-            except Exception as del_e:
-                 # Log error but continue, maybe index didn't exist or perms issue
-                 self._logger.warning(f"[{group_name}] Could not delete failed index {failed_index} (might not exist): {del_e}")
-            # ---------------------------------------------
-
             # --- Conditionally Clear the UNPARSED index ---
             if not keep_unparsed_index:
                 try:
@@ -433,22 +428,43 @@ class SingleGroupParserAgent:
                  self._logger.info(f"[{group_name}] Skipping deletion of unparsed index: {failed_index} (--keep-unparsed specified)")
             # ---------------------------------------------
 
-            # Fetch samples (generation)
-            self._logger.info(f"[{group_name}] Fetching {state['sample_size_generation']} samples for generation from '{source_index}'...")
-            samples_gen = self._db.get_sample_lines(
-                index=source_index, field=state['field_to_parse'], sample_size=state['sample_size_generation']
-            )
-            if not samples_gen: self._logger.warning(f"[{group_name}] No samples found for generation.")
+            # --- Fetch samples ONLY if no pattern was provided ---
+            if not provided_pattern:
+                self._logger.info(f"[{group_name}] No pattern provided, fetching samples...")
+                # Fetch samples (generation)
+                self._logger.info(f"[{group_name}] Fetching {state['sample_size_generation']} samples for generation from '{source_index}'...")
+                samples_gen = self._db.get_sample_lines(
+                    index=source_index,
+                    field=state['field_to_parse'],
+                    sample_size=state['sample_size_generation']
+                )
+                if not samples_gen:
+                    self._logger.warning(f"[{group_name}] No samples found for generation.")
 
-            # Fetch samples (validation)
-            self._logger.info(f"[{group_name}] Fetching {state['sample_size_validation']} samples for validation from '{source_index}'...")
-            samples_val = self._db.get_sample_lines(
-                index=source_index, field=state['field_to_parse'], sample_size=state['sample_size_validation']
-            )
-            if not samples_val:
-                msg = f"[{group_name}] No samples found for validation. Cannot validate pattern."
-                self._logger.error(msg)
-                errors.append(msg) # This might prevent reaching validation node
+                # Fetch samples (validation)
+                self._logger.info(f"[{group_name}] Fetching {state['sample_size_validation']} samples for validation from '{source_index}'...")
+                samples_val = self._db.get_sample_lines(
+                    index=source_index,
+                    field=state['field_to_parse'],
+                    sample_size=state['sample_size_validation']
+                )
+                if not samples_val:
+                    msg = f"[{group_name}] No samples found for validation. Cannot validate pattern."
+                    self._logger.error(msg)
+                    errors.append(msg) # This might prevent reaching validation node
+            else:
+                 self._logger.info(f"[{group_name}] Using provided pattern: {provided_pattern}. Skipping sample fetching.")
+                 # Need validation samples even if pattern is provided
+                 self._logger.info(f"[{group_name}] Fetching {state['sample_size_validation']} samples for validation from '{source_index}'...")
+                 samples_val = self._db.get_sample_lines(
+                     index=source_index,
+                     field=state['field_to_parse'],
+                     sample_size=state['sample_size_validation']
+                 )
+                 if not samples_val:
+                     msg = f"[{group_name}] No samples found for validation (required even with provided pattern)."
+                     self._logger.error(msg); errors.append(msg)
+
 
         except Exception as e:
             msg = f"[{group_name}] Error during start node: {e}"
@@ -460,12 +476,14 @@ class SingleGroupParserAgent:
             "source_index": source_index,
             "target_index": target_index,
             "failed_index": failed_index, # <-- Store failed index name
-            "sample_lines_for_generation": samples_gen,
+            "sample_lines_for_generation": samples_gen, # Will be empty if pattern provided
             "sample_lines_for_validation": samples_val,
             "error_messages": errors,
             "current_attempt": 1, # Reset attempts
-            "current_grok_pattern": None, "last_failed_pattern": None,
-            "validation_passed": False, "final_parsing_status": "pending",
+            "current_grok_pattern": provided_pattern, # Use provided pattern if any
+            "last_failed_pattern": None,
+            "validation_passed": False, # Assume not passed until validation runs
+            "final_parsing_status": "pending",
             "final_parsing_results_summary": None # Reset results
         }
 
@@ -481,8 +499,10 @@ class SingleGroupParserAgent:
         self._logger.info(f"[{group_name}] Attempt {attempt}: Generating Grok pattern...")
 
         if not samples:
-            self._logger.warning(f"[{group_name}] No samples for generation attempt {attempt}.")
-            return {"current_grok_pattern": None, "error_messages": errors}
+            msg = f"[{group_name}] No samples available for generation attempt {attempt}."
+            self._logger.warning(msg)
+            errors.append(msg)
+            return {"current_grok_pattern": None, "error_messages": errors} # Cannot generate
 
         try:
             # Prepare context about previous failure
@@ -554,6 +574,8 @@ class SingleGroupParserAgent:
         if not validation_samples:
             msg = f"[{group_name}] No samples for validation."
             self._logger.warning(msg); errors.append(msg)
+            # If validation fails due to lack of samples, we should probably fallback directly
+            # But let's keep the flow simple for now and let the conditional edge handle it
             return {"validation_passed": False, "error_messages": errors}
 
         try:
@@ -588,10 +610,16 @@ class SingleGroupParserAgent:
     def _parse_all_node(self, state: SingleGroupParseGraphState) -> SingleGroupParseGraphState | Dict[str, Any]:
         """Parses all documents using the validated pattern, writing to target_index."""
         group_name = state['group_name']
-        pattern = state['current_grok_pattern']
+        pattern = state['current_grok_pattern'] # Should be set and validated by now
         target_index = state['target_index']
-        failed_index = state['failed_index'] # Also need failed index here
+        failed_index = state['failed_index']
         self._logger.info(f"[{group_name}] Validation passed. Parsing all documents -> Target: {target_index}, Failed/Skipped -> {failed_index}")
+
+        if not pattern: # Safety check
+            msg = f"[{group_name}] Critical error: Pattern is missing in _parse_all_node."
+            self._logger.error(msg)
+            return {"final_parsing_status": "failed", "error_messages": state.get("error_messages", []) + [msg]}
+
 
         scroll_config: ScrollGrokParserState = {
             "source_index": state['source_index'],
@@ -705,15 +733,69 @@ class SingleGroupParserAgent:
             "validation_passed": False              # Reset validation status
         }
 
+    def _store_results_node(self, state: SingleGroupParseGraphState) -> Dict[str, Any]:
+        """Stores the final results of the parsing attempt in Elasticsearch."""
+        group_name = state['group_name']
+        status = state.get('final_parsing_status', 'unknown')
+        summary = state.get('final_parsing_results_summary')
+        errors = list(state.get('error_messages', [])) # Start with existing errors
+
+        self._logger.info(f"[{group_name}] Storing parsing results to history index. Status: {status}")
+
+        # Determine the pattern used based on status
+        pattern_used = state.get('current_grok_pattern')
+        if status == "success_fallback":
+            pattern_used = self.FALLBACK_PATTERN
+        elif "failed" in status and not pattern_used: # If failed early, pattern might be None
+             pattern_used = state.get('last_failed_pattern') or "N/A (Failed before pattern selection)"
+
+        # Prepare document for ES
+        result_doc = {
+            "group_name": group_name,
+            "grok_pattern_used": pattern_used,
+            "parsing_status": status,
+            "timestamp": datetime.now().isoformat(),
+            # Extract counts from summary, defaulting to 0 if summary is None
+            "processed_count": summary.get("processed", 0) if summary else 0,
+            "successful_count": summary.get("successful", 0) if summary else 0,
+            "failed_count": summary.get("failed", 0) if summary else 0, # Docs sent to failed index
+            "parse_error_count": summary.get("parse_errors", 0) if summary else 0, # Grok mismatches
+            "index_error_count": summary.get("index_errors", 0) if summary else 0, # Bulk errors
+            "agent_error_count": len(state.get('error_messages', [])) # Count agent-level errors
+        }
+
+        try:
+            self._db.insert(data=result_doc, index=cfg.INDEX_GROK_RESULTS_HISTORY)
+            self._logger.info(f"[{group_name}] Successfully stored results in '{cfg.INDEX_GROK_RESULTS_HISTORY}'.")
+        except Exception as e:
+            msg = f"[{group_name}] Failed to store results in history index: {e}"
+            self._logger.error(msg, exc_info=True)
+            errors.append(msg) # Add storage error to the list
+
+        # This node doesn't change the main flow, just reports. Return potentially updated errors.
+        return {"error_messages": errors}
+
     # --- Conditional Edges (Updated) ---
+
+    def _decide_pattern_source(self, state: SingleGroupParseGraphState) -> str:
+        """Decides whether to generate a pattern or use the provided one."""
+        group_name = state['group_name']
+        # Check the current_grok_pattern *in the state* which was set by start_node
+        if state.get('current_grok_pattern'):
+            self._logger.debug(f"[{group_name}] Pattern provided or already set, moving to validation.")
+            return "validate_pattern" # Skip generation
+        else:
+            self._logger.debug(f"[{group_name}] No pattern provided, moving to generation.")
+            return "generate_grok" # Go to generation
 
     def _decide_after_generate(self, state: SingleGroupParseGraphState) -> str:
         """Decides whether to validate or fallback after pattern generation."""
         group_name = state['group_name']
-        # Check if *any* errors occurred during start or generation
+        # Check if *any* errors occurred during start or generation that prevent validation
         if state.get("error_messages") and any("No samples found for validation" in msg for msg in state["error_messages"]):
              self._logger.error(f"[{group_name}] Cannot validate (no validation samples), moving to fallback.")
              return "fallback"
+
         if state.get('current_grok_pattern'):
             self._logger.debug(f"[{group_name}] Pattern generated, moving to validation.")
             return "validate_pattern"
@@ -746,9 +828,8 @@ class SingleGroupParserAgent:
                 self._logger.error(f"[{group_name}] Validation failed after max attempts ({max_attempts}), moving to fallback.")
                 return "fallback"
 
-    # --- Build Graph (No changes needed in structure, nodes handle logic) ---
+    # --- Build Graph (Correction Applied Here) ---
     def _build_graph(self) -> CompiledGraph:
-        """Builds the LangGraph StateGraph."""
         workflow = StateGraph(SingleGroupParseGraphState)
 
         workflow.add_node("start", self._start_node)
@@ -757,37 +838,54 @@ class SingleGroupParserAgent:
         workflow.add_node("prepare_for_retry", self._prepare_for_retry_node)
         workflow.add_node("parse_all", self._parse_all_node)
         workflow.add_node("fallback", self._fallback_node)
+        workflow.add_node("store_results", self._store_results_node) # Store results before END
 
         workflow.set_entry_point("start")
 
-        workflow.add_edge("start", "generate_grok")
+        # --- CORRECTED EDGES from 'start' ---
+        # Use ONLY the conditional edge to decide the next step based on pattern presence
+        workflow.add_conditional_edges(
+            "start",
+            self._decide_pattern_source, # Use the new condition function
+            {
+                "generate_grok": "generate_grok",       # Go generate if no pattern
+                "validate_pattern": "validate_pattern"  # Skip generation if pattern exists
+            }
+        )
+        # REMOVED: workflow.add_edge("start", "generate_grok") # <<< THIS WAS THE BUG >>>
+        # ------------------------------------
 
         workflow.add_conditional_edges(
-            "generate_grok",
-            self._decide_after_generate,
-            {
-                "validate_pattern": "validate_pattern",
-                "prepare_for_retry": "prepare_for_retry", # If generation fails with retries left
-                "fallback": "fallback",                  # If generation fails with no retries left
-            }
+                "generate_grok",
+                self._decide_after_generate,
+                {
+                    "validate_pattern": "validate_pattern",
+                    "prepare_for_retry": "prepare_for_retry",
+                    "fallback": "fallback"
+                }
         )
 
         workflow.add_conditional_edges(
-            "validate_pattern",
-            self._decide_after_validation,
-            {
-                "parse_all": "parse_all",
-                "prepare_for_retry": "prepare_for_retry",
-                "fallback": "fallback",
-            }
+                "validate_pattern",
+                self._decide_after_validation,
+                {
+                    "parse_all": "parse_all",
+                    "prepare_for_retry": "prepare_for_retry",
+                    "fallback": "fallback"
+                }
         )
 
-        workflow.add_edge("prepare_for_retry", "generate_grok") # Loop back
+        workflow.add_edge("prepare_for_retry", "generate_grok") # Loop back to generate after prep
 
-        workflow.add_edge("parse_all", END)
-        workflow.add_edge("fallback", END)
+        # Edges leading to storing results
+        workflow.add_edge("parse_all", "store_results")
+        workflow.add_edge("fallback", "store_results")
+
+        # Final edge to END
+        workflow.add_edge("store_results", END)
 
         return workflow.compile()
+
 
     # --- Run Method (Updated initial state setup) ---
     def run(self, initial_config: Dict[str, Any]) -> SingleGroupParseGraphState | Dict[str, Any]:
@@ -795,7 +893,7 @@ class SingleGroupParserAgent:
         self._logger.info(f"[{group_name}] Initializing SingleGroupParserAgent graph run...")
 
         # Graph input MUST match the State TypedDict exactly
-        graph_input: SingleGroupParseGraphState = {
+        graph_input: SingleGroupParseGraphState | Dict[str, Any] = {
             "group_name": group_name,
             "source_index": "", # Determined by start node
             "target_index": "", # Determined by start node
@@ -807,6 +905,8 @@ class SingleGroupParserAgent:
             "validation_threshold": initial_config['validation_threshold'],
             "batch_size": initial_config['batch_size'],
             "max_regeneration_attempts": initial_config['max_regeneration_attempts'],
+            "keep_unparsed_index": initial_config.get('keep_unparsed_index', False), # Pass this flag
+            "provided_grok_pattern": initial_config.get("provided_grok_pattern"),    # Pass provided pattern here
             # --- Defaults for dynamic state (will be overwritten by start_node) ---
             "current_attempt": 0, "current_grok_pattern": None, "last_failed_pattern": None,
             "sample_lines_for_generation": [], "sample_lines_for_validation": [],
@@ -848,12 +948,13 @@ class AllGroupsParserAgent:
         self,
         initial_state: AllGroupsParserState,
         num_threads: int = 1,
-        batch_size: int = 5000,
+        batch_size: int = 500,
         sample_size: int = 10, # Sample for generation
         validation_sample_size: int = 10,
-        validation_threshold: float = 0.5,
+        validation_threshold: float = 0.51,
         max_regeneration_attempts: int = 5,# Default 3 attempts = 2 retries
-        keep_unparsed_index: bool = False # <-- Accept flag
+        keep_unparsed_index: bool = False, # <-- Accept flag
+        provided_grok_pattern: Optional[str] = None # <-- Accept pattern (only used for single group run)
     ) -> AllGroupsParserState:
         self._logger.info(f"Starting AllGroupsParserAgent run. Workers: {num_threads}, Batch: {batch_size}, GenSample: {sample_size}, ValSample: {validation_sample_size}, MaxAttempts: {max_regeneration_attempts}")
         result_state = initial_state.copy()
@@ -875,14 +976,13 @@ class AllGroupsParserAgent:
             "sample_size_validation": validation_sample_size,
             "validation_threshold": validation_threshold,
             "max_regeneration_attempts": max_regeneration_attempts,
-            "keep_unparsed_index": keep_unparsed_index # <-- Pass flag here
+            "keep_unparsed_index": keep_unparsed_index, # <-- Pass flag here
+            "provided_grok_pattern": provided_grok_pattern # Pass pattern (will be None for all groups run)
             # group_name will be added per task
         }
 
         effective_num_workers = max(1, num_threads)
         # Using ThreadPoolExecutor for I/O-bound tasks (like ES calls, LLM calls within graph)
-        # If CPU-bound work becomes dominant (e.g., very complex local processing),
-        # consider ProcessPoolExecutor, but ensure state/objects are pickleable.
         Executor = ThreadPoolExecutor
 
         with Executor(max_workers=effective_num_workers) as executor:
