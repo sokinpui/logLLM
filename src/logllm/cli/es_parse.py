@@ -267,7 +267,7 @@ def register_es_parse_parser(subparsers):
         help='(Optional) Additional source fields to copy to the target document.'
     )
     es_parse_parser.add_argument(
-        '-b', '--batch-size', type=int, default=5000, # Keep updated default
+        '-b', '--batch-size', type=int, default=500, # Keep updated default
         help='Documents to process/index per batch (default: 5000).'
     )
     es_parse_parser.add_argument(

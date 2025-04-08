@@ -390,7 +390,7 @@ class SingleGroupParserAgent:
         # Build and compile the graph
         self.graph = self._build_graph()
 
-    # --- Graph Nodes (Updated) ---
+    # --- Graph Nodes ---
 
     def _start_node(self, state: SingleGroupParseGraphState) -> SingleGroupParseGraphState | Dict[str, Any]:
         """Initializes indices, clears failed index, fetches samples."""
@@ -705,6 +705,48 @@ class SingleGroupParserAgent:
             "validation_passed": False              # Reset validation status
         }
 
+    def _store_results_node(self, state: SingleGroupParseGraphState) -> Dict[str, Any]:
+        """Stores the final results of the parsing attempt in Elasticsearch."""
+        group_name = state['group_name']
+        status = state.get('final_parsing_status', 'unknown')
+        summary = state.get('final_parsing_results_summary')
+        errors = list(state.get('error_messages', [])) # Start with existing errors
+
+        self._logger.info(f"[{group_name}] Storing parsing results to history index. Status: {status}")
+
+        # Determine the pattern used based on status
+        pattern_used = state.get('current_grok_pattern')
+        if status == "success_fallback":
+            pattern_used = self.FALLBACK_PATTERN
+        elif "failed" in status and not pattern_used: # If failed early, pattern might be None
+             pattern_used = state.get('last_failed_pattern') or "N/A (Failed before pattern selection)"
+
+        # Prepare document for ES
+        result_doc = {
+            "group_name": group_name,
+            "grok_pattern_used": pattern_used,
+            "parsing_status": status,
+            "timestamp": datetime.now().isoformat(),
+            # Extract counts from summary, defaulting to 0 if summary is None
+            "processed_count": summary.get("processed", 0) if summary else 0,
+            "successful_count": summary.get("successful", 0) if summary else 0,
+            "failed_count": summary.get("failed", 0) if summary else 0, # Docs sent to failed index
+            "parse_error_count": summary.get("parse_errors", 0) if summary else 0, # Grok mismatches
+            "index_error_count": summary.get("index_errors", 0) if summary else 0, # Bulk errors
+            "agent_error_count": len(state.get('error_messages', [])) # Count agent-level errors
+        }
+
+        try:
+            self._db.insert(data=result_doc, index=cfg.INDEX_GROK_RESULTS_HISTORY)
+            self._logger.info(f"[{group_name}] Successfully stored results in '{cfg.INDEX_GROK_RESULTS_HISTORY}'.")
+        except Exception as e:
+            msg = f"[{group_name}] Failed to store results in history index: {e}"
+            self._logger.error(msg, exc_info=True)
+            errors.append(msg) # Add storage error to the list
+
+        # This node doesn't change the main flow, just reports. Return potentially updated errors.
+        return {"error_messages": errors}
+
     # --- Conditional Edges (Updated) ---
 
     def _decide_after_generate(self, state: SingleGroupParseGraphState) -> str:
@@ -748,7 +790,6 @@ class SingleGroupParserAgent:
 
     # --- Build Graph (No changes needed in structure, nodes handle logic) ---
     def _build_graph(self) -> CompiledGraph:
-        """Builds the LangGraph StateGraph."""
         workflow = StateGraph(SingleGroupParseGraphState)
 
         workflow.add_node("start", self._start_node)
@@ -757,37 +798,25 @@ class SingleGroupParserAgent:
         workflow.add_node("prepare_for_retry", self._prepare_for_retry_node)
         workflow.add_node("parse_all", self._parse_all_node)
         workflow.add_node("fallback", self._fallback_node)
+        workflow.add_node("store_results", self._store_results_node) # <-- Add the new node
 
         workflow.set_entry_point("start")
-
         workflow.add_edge("start", "generate_grok")
+        workflow.add_conditional_edges("generate_grok", self._decide_after_generate, {"validate_pattern": "validate_pattern", "prepare_for_retry": "prepare_for_retry", "fallback": "fallback"})
+        workflow.add_conditional_edges("validate_pattern", self._decide_after_validation, {"parse_all": "parse_all", "prepare_for_retry": "prepare_for_retry", "fallback": "fallback"})
+        workflow.add_edge("prepare_for_retry", "generate_grok")
 
-        workflow.add_conditional_edges(
-            "generate_grok",
-            self._decide_after_generate,
-            {
-                "validate_pattern": "validate_pattern",
-                "prepare_for_retry": "prepare_for_retry", # If generation fails with retries left
-                "fallback": "fallback",                  # If generation fails with no retries left
-            }
-        )
+        # --- Update Edges to point to store_results ---
+        workflow.add_edge("parse_all", "store_results")
+        workflow.add_edge("fallback", "store_results")
+        # ---------------------------------------------
 
-        workflow.add_conditional_edges(
-            "validate_pattern",
-            self._decide_after_validation,
-            {
-                "parse_all": "parse_all",
-                "prepare_for_retry": "prepare_for_retry",
-                "fallback": "fallback",
-            }
-        )
-
-        workflow.add_edge("prepare_for_retry", "generate_grok") # Loop back
-
-        workflow.add_edge("parse_all", END)
-        workflow.add_edge("fallback", END)
+        # --- Add final edge from store_results to END ---
+        workflow.add_edge("store_results", END)
+        # --------------------------------------------
 
         return workflow.compile()
+
 
     # --- Run Method (Updated initial state setup) ---
     def run(self, initial_config: Dict[str, Any]) -> SingleGroupParseGraphState | Dict[str, Any]:
@@ -795,7 +824,7 @@ class SingleGroupParserAgent:
         self._logger.info(f"[{group_name}] Initializing SingleGroupParserAgent graph run...")
 
         # Graph input MUST match the State TypedDict exactly
-        graph_input: SingleGroupParseGraphState = {
+        graph_input: SingleGroupParseGraphState | Dict[str, Any] = {
             "group_name": group_name,
             "source_index": "", # Determined by start node
             "target_index": "", # Determined by start node
@@ -848,10 +877,10 @@ class AllGroupsParserAgent:
         self,
         initial_state: AllGroupsParserState,
         num_threads: int = 1,
-        batch_size: int = 5000,
+        batch_size: int = 500,
         sample_size: int = 10, # Sample for generation
         validation_sample_size: int = 10,
-        validation_threshold: float = 0.5,
+        validation_threshold: float = 0.51,
         max_regeneration_attempts: int = 5,# Default 3 attempts = 2 retries
         keep_unparsed_index: bool = False # <-- Accept flag
     ) -> AllGroupsParserState:

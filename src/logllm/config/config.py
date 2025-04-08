@@ -82,6 +82,8 @@ INDEX_VECTOR_STORE = "vector_store"
 
 INDEX_GROUP_INFOS = "group_infos"
 
+INDEX_GROK_RESULTS_HISTORY = "grok_results_history"
+
 # ==========================
 
 # LLM model
