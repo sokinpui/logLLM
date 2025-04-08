@@ -553,7 +553,7 @@ def handle_es_parse_use(args):
             "batch_size": args.batch_size or 1000, # Use default or CLI arg
             "sample_size_generation": 0, # Not needed
             "sample_size_validation": args.validation_sample_size or 10, # Keep validation sample size
-            "validation_threshold": 1.01, # Set threshold impossible to meet to prevent re-generation on validation failure
+            "validation_threshold": 0.5, # Set threshold impossible to meet to prevent re-generation on validation failure
             "max_regeneration_attempts": 1, # Only 1 attempt (no regeneration)
             "provided_grok_pattern": found_pattern, # FORCE the historical pattern
             "keep_unparsed_index": args.keep_unparsed or False # Use default or CLI arg
