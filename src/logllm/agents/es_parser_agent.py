@@ -127,7 +127,7 @@ def _parallel_group_worker_new(
              "sample_size_generation": single_group_config.get('sample_size_generation', 20),
              "sample_size_validation": single_group_config.get('sample_size_validation', 10),
              "validation_threshold": single_group_config.get('validation_threshold', 0.5),
-             "batch_size": single_group_config.get('batch_size', 5000),
+             "batch_size": single_group_config.get('batch_size', 1000),
              "max_regeneration_attempts": single_group_config.get('max_regeneration_attempts', 3),
              "keep_unparsed_index": single_group_config.get("keep_unparsed_index", False), # Include this
              "provided_grok_pattern": single_group_config.get("provided_grok_pattern"),   # Include this
@@ -153,7 +153,7 @@ class ScrollGrokParserAgent:
         self._db = db
         self._logger = Logger()
         self._grok_instance: Optional[Grok] = None
-        self._batch_size_this_run: int = 5000
+        self._batch_size_this_run: int = 1000
         # Reset counters within run()
 
     def _initialize_grok(self, pattern: str) -> bool:
