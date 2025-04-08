@@ -36,6 +36,7 @@ def handle_es_parse(args):
     target_group = args.group
     field_to_parse = args.field
     fields_to_copy = args.copy_fields
+    provided_pattern = args.pattern
 
     # --- Get new config options from args ---
     validation_sample_size = args.validation_sample_size
@@ -49,6 +50,12 @@ def handle_es_parse(args):
     if validation_sample_size < 1: validation_sample_size = 10
     if not (0.0 <= validation_threshold <= 1.0): validation_threshold = 0.5
     if max_regeneration_attempts < 0: max_regeneration_attempts = 0 # 0 retries means 1 attempt
+
+    if provided_pattern and not target_group:
+        msg = "The --pattern argument requires the --group argument to be specified."
+        logger.error(msg)
+        print(f"Error: {msg}")
+        sys.exit(1)
 
     # Log execution mode
     if target_group:
@@ -87,7 +94,8 @@ def handle_es_parse(args):
                 "sample_size_generation": sample_size, # Map arg to state key
                 "sample_size_validation": validation_sample_size,
                 "validation_threshold": validation_threshold,
-                "max_regeneration_attempts": max_regeneration_attempts + 1 # Agent expects max *attempts*
+                "max_regeneration_attempts": max_regeneration_attempts + 1, # Agent expects max *attempts*
+                "provided_grok_pattern": provided_pattern
             }
 
             # Run the agent (which executes its internal graph)
@@ -472,9 +480,10 @@ def register_es_parse_parser(subparsers):
     )
 
     run_parser.add_argument(
-            '--keep-unparsed', action='store_true',
-            help="Do not delete the corresponding 'unparsed_log_*' index before running."
+        '-p', '--pattern', type=str, default=None,
+        help='Provide a specific Grok pattern string to use for parsing. Requires --group to be specified.'
     )
+
     run_parser.set_defaults(func=handle_es_parse) # Point 'run' action to the original handler
 
     # --- 'list' Subcommand (NEW) ---

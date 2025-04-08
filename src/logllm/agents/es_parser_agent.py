@@ -61,6 +61,7 @@ class SingleGroupParseGraphState(TypedDict):
     batch_size: int
     max_regeneration_attempts: int
     keep_unparsed_index: bool
+    provided_grok_pattern: Optional[str]
 
     # Dynamic state during run
     current_attempt: int
@@ -396,7 +397,9 @@ class SingleGroupParserAgent:
         """Initializes indices, clears failed index, fetches samples."""
         group_name = state['group_name']
         keep_unparsed_index = state.get('keep_unparsed_index', False) # Get the flag
+        provided_pattern = state.get('provided_grok_pattern')  # Retrieve provided pattern
         self._logger.info(f"[{group_name}] Starting graph run...")
+
         errors = []
         source_index = ""
         target_index = ""
@@ -436,14 +439,19 @@ class SingleGroupParserAgent:
             # Fetch samples (generation)
             self._logger.info(f"[{group_name}] Fetching {state['sample_size_generation']} samples for generation from '{source_index}'...")
             samples_gen = self._db.get_sample_lines(
-                index=source_index, field=state['field_to_parse'], sample_size=state['sample_size_generation']
+                index=source_index,
+                field=state['field_to_parse'],
+                sample_size=state['sample_size_generation']
             )
-            if not samples_gen: self._logger.warning(f"[{group_name}] No samples found for generation.")
+            if not samples_gen:
+                self._logger.warning(f"[{group_name}] No samples found for generation.")
 
             # Fetch samples (validation)
             self._logger.info(f"[{group_name}] Fetching {state['sample_size_validation']} samples for validation from '{source_index}'...")
             samples_val = self._db.get_sample_lines(
-                index=source_index, field=state['field_to_parse'], sample_size=state['sample_size_validation']
+                index=source_index,
+                field=state['field_to_parse'],
+                sample_size=state['sample_size_validation']
             )
             if not samples_val:
                 msg = f"[{group_name}] No samples found for validation. Cannot validate pattern."
@@ -464,8 +472,10 @@ class SingleGroupParserAgent:
             "sample_lines_for_validation": samples_val,
             "error_messages": errors,
             "current_attempt": 1, # Reset attempts
-            "current_grok_pattern": None, "last_failed_pattern": None,
-            "validation_passed": False, "final_parsing_status": "pending",
+            "current_grok_pattern": provided_pattern, # Use provided pattern if any
+            "last_failed_pattern": None,
+            "validation_passed": False,
+            "final_parsing_status": "pending",
             "final_parsing_results_summary": None # Reset results
         }
 
@@ -749,6 +759,16 @@ class SingleGroupParserAgent:
 
     # --- Conditional Edges (Updated) ---
 
+    def _decide_pattern_source(self, state: SingleGroupParseGraphState) -> str:
+        """Decides whether to generate a pattern or use the provided one."""
+        group_name = state['group_name']
+        if state.get('current_grok_pattern'):
+            self._logger.debug(f"[{group_name}] Pattern provided or already set, moving to validation.")
+            return "validate_pattern"
+        else:
+            self._logger.debug(f"[{group_name}] No pattern provided, moving to generation.")
+            return "generate_grok"
+
     def _decide_after_generate(self, state: SingleGroupParseGraphState) -> str:
         """Decides whether to validate or fallback after pattern generation."""
         group_name = state['group_name']
@@ -801,9 +821,38 @@ class SingleGroupParserAgent:
         workflow.add_node("store_results", self._store_results_node) # <-- Add the new node
 
         workflow.set_entry_point("start")
+
+        workflow.add_conditional_edges(
+            "start",
+            self._decide_pattern_source, # Use the new condition function
+            {
+                "generate_grok": "generate_grok",       # Go generate if no pattern
+                "validate_pattern": "validate_pattern"  # Skip generation if pattern exists
+            }
+        )
+
         workflow.add_edge("start", "generate_grok")
-        workflow.add_conditional_edges("generate_grok", self._decide_after_generate, {"validate_pattern": "validate_pattern", "prepare_for_retry": "prepare_for_retry", "fallback": "fallback"})
-        workflow.add_conditional_edges("validate_pattern", self._decide_after_validation, {"parse_all": "parse_all", "prepare_for_retry": "prepare_for_retry", "fallback": "fallback"})
+
+        workflow.add_conditional_edges(
+                "generate_grok",
+                self._decide_after_generate,
+                {
+                    "validate_pattern": "validate_pattern",
+                    "prepare_for_retry": "prepare_for_retry",
+                    "fallback": "fallback"
+                }
+        )
+
+        workflow.add_conditional_edges(
+                "validate_pattern",
+                self._decide_after_validation,
+                {
+                    "parse_all": "parse_all",
+                    "prepare_for_retry": "prepare_for_retry",
+                    "fallback": "fallback"
+                }
+        )
+
         workflow.add_edge("prepare_for_retry", "generate_grok")
 
         # --- Update Edges to point to store_results ---
