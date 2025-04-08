@@ -179,6 +179,12 @@ The `src/logllm/config/config.py` file contains centralized configuration settin
   - **Purpose**: Names the Elasticsearch index where the `Collector` stores information about discovered log groups and their associated file paths.
   - **Usage**: Used by `GroupLogParserAgent` (`src.logllm.agents.parser_agent`) and `AllGroupsParserAgent` (`src.logllm.agents.es_parser_agent`) to determine which files/groups to parse.
 
+- **`INDEX_GROK_RESULTS_HISTORY`**
+  - **Type**: `str`
+  - **Value**: `"grok_results_history"`
+  - **Purpose**: Names the Elasticsearch index where `SingleGroupParserAgent` stores a summary of each Grok parsing run (status, pattern used, counts).
+  - **Usage**: Queried by `es-parse list` command. Written to by `SingleGroupParserAgent`.
+
 ---
 
 ### LLM Model Configuration
@@ -220,15 +226,15 @@ The `src/logllm/config/config.py` file contains centralized configuration settin
 - **Returns**: `str`: An index name like `"pre_process_1"`.
 - **Usage**: Intended for agents that filter logs based on events before detailed analysis.
 
-### Function: `get_parsed_log_storage_index(group: str) -> str`
+### Function: `get_parsed_log_storage_index(group: str) -> str` # <-- NEW
 - **Purpose**: Generates a standardized Elasticsearch index name for storing **successfully parsed/structured** log data for a specific group.
 - **Parameters**: `group` (str): The name of the original log group.
 - **Returns**: `str`: An index name like `"parsed_log_apache"`, `"parsed_log_hadoop"`. Cleans the group name.
-- **Usage**: Used by `es-parse` (`ScrollGrokParserAgent`) as the target index for successfully processed documents.
+- **Usage**: Used by `es-parse` (`SingleGroupParserAgent` via `ScrollGrokParserAgent`) as the target index for successfully processed documents.
 
-### Function: `get_unparsed_log_storage_index(group: str) -> str`
+### Function: `get_unparsed_log_storage_index(group: str) -> str` # <-- NEW
 - **Purpose**: Generates a standardized Elasticsearch index name for storing log entries that **failed parsing** or were processed using a **fallback** mechanism for a specific group.
 - **Parameters**: `group` (str): The name of the original log group.
 - **Returns**: `str`: An index name like `"unparsed_log_apache"`, `"unparsed_log_hadoop"`. Cleans the group name.
-- **Usage**: Used by `es-parse` (`ScrollGrokParserAgent`) as the target index for documents that couldn't be parsed with the primary pattern or were handled by fallback. Allows separation of problematic logs.
+- **Usage**: Used by `es-parse` (`SingleGroupParserAgent` via `ScrollGrokParserAgent`) as the target index for documents that couldn't be parsed with the primary pattern or were handled by fallback. Allows separation of problematic logs.
 

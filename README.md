@@ -97,18 +97,41 @@ python -m src.logllm parse -f ./logs/ssh/SSH.log [--grok-pattern "<GROK_STRING>"
 See `python -m src.logllm parse --help`.
 
 ### Elasticsearch-based Parsing (`es-parse`)
-Parse raw logs stored in Elasticsearch, indexing results back into ES. Requires a running DB and collected logs.
-```bash
-# Parse all log groups found in Elasticsearch (parallel workers)
-python -m src.logllm es-parse [-t <threads>] [-b <batch_size>] [-s <gen_sample>] \
-                              [--validation-sample-size <val_sample>] \
-                              [--validation-threshold <rate>] [--max-retries <num>] \
-                              [--copy-fields <field1> <field2>] [--keep-unparsed]
+Parse raw logs stored in Elasticsearch, indexing results back into ES. Requires a running DB and collected logs. Provides subcommands: `run`, `list`, `use`.
 
-# Parse only a specific group
-python -m src.logllm es-parse -g <group_name> [options...]
+```bash
+# Run parsing for all log groups found in Elasticsearch (parallel workers)
+python -m src.logllm es-parse run [-t <threads>] [-b <batch_size>] [-s <gen_sample>] \
+                                 [--validation-sample-size <val_sample>] \
+                                 [--validation-threshold <rate>] [--max-retries <num>] \
+                                 [--copy-fields <field1> <field2>] [--keep-unparsed]
+
+# Run parsing only for a specific group (ignores -t)
+python -m src.logllm es-parse run -g <group_name> [options...]
+
+# Run parsing for a specific group using a user-provided Grok pattern
+python -m src.logllm es-parse run -g <group_name> -p "<GROK_STRING>" [options...]
+
+# List the latest parsing results for each group
+python -m src.logllm es-parse list
+
+# List all historical parsing results for all groups
+python -m src.logllm es-parse list -a
+
+# List only results for a specific group (latest)
+python -m src.logllm es-parse list -g <group_name>
+
+# List only the names of groups found in history
+python -m src.logllm es-parse list --group-name
+
+# List results in JSON format
+python -m src.logllm es-parse list --json
+
+# Re-run parsing for a group using the pattern from a specific past run
+# Use the timestamp displayed by 'es-parse list'
+python -m src.logllm es-parse use -g <group_name> -t "YYYY-MM-DD HH:MM:SS" [options...]
 ```
-See `python -m src.logllm es-parse --help`.
+See `python -m src.logllm es-parse --help` for all options and subcommand details.
 
 ### Prompt Management (`pm`)
 Manage LLM prompts stored in `prompts.json` (or custom path via global `-j/--json` or `--test`).

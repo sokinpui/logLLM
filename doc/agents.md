@@ -138,7 +138,7 @@ This file contains agents responsible for parsing log data directly from Elastic
 ### Class: `SingleGroupParseGraphState(TypedDict)`
 - **Purpose**: Defines the state for the `langgraph`-based `SingleGroupParserAgent` orchestrator.
 - **Fields**:
-  - *Configuration*: `group_name`, `source_index`, `target_index`, `failed_index`, `field_to_parse`, `fields_to_copy`, `sample_size_generation`, `sample_size_validation`, `validation_threshold`, `batch_size`, `max_regeneration_attempts`.
+  - *Configuration*: `group_name`, `source_index`, `target_index`, `failed_index`, `field_to_parse`, `fields_to_copy`, `sample_size_generation`, `sample_size_validation`, `validation_threshold`, `batch_size`, `max_regeneration_attempts`, `keep_unparsed_index`, `provided_grok_pattern`.
   - *Dynamic State*: `current_attempt`, `current_grok_pattern`, `last_failed_pattern`, `sample_lines_for_generation`, `sample_lines_for_validation`, `validation_passed`, `final_parsing_status`, `final_parsing_results_summary` (dict), `error_messages` (list).
 
 ### Class: `AllGroupsParserState(TypedDict)`
@@ -151,7 +151,7 @@ This file contains agents responsible for parsing log data directly from Elastic
   - `status` (str): Overall status ('pending', 'running', 'completed', 'failed').
 
 ### Class: `ScrollGrokParserAgent`
-- **Purpose**: Low-level agent responsible for scrolling through documents in a source Elasticsearch index, applying a Grok pattern, and performing bulk indexing of successful parses to a target index and failed/fallback documents to a separate failed index.
+- **Purpose**: Low-level agent responsible for scrolling through documents in a source Elasticsearch index, applying a Grok pattern, and performing bulk indexing of successful parses to a target index and failed/fallback documents to a separate failed index. Also stores parsing results summary to a history index.
 - **Key Methods**:
   - **`__init__(self, db: ElasticsearchDatabase)`**
     - **Description**: Initializes with a database connection.
@@ -166,7 +166,7 @@ This file contains agents responsible for parsing log data directly from Elastic
   - **`_flush_failed_batch(self, failed_index: str)`**: Performs bulk index operation for failed/fallback documents (storing original source) to the `failed_index`.
 
 ### Class: `SingleGroupParserAgent(Agent)`
-- **Purpose**: Orchestrates the parsing process for a *single* log group using a `langgraph` workflow. Handles pattern generation (via LLM), validation, retries, and invokes `ScrollGrokParserAgent` for the actual parsing and indexing based on the validated pattern or fallback.
+- **Purpose**: Orchestrates the parsing process for a *single* log group using a `langgraph` workflow. Handles pattern generation (via LLM), validation, retries, and invokes `ScrollGrokParserAgent` for the actual parsing and indexing based on the validated pattern or fallback. Stores results in a history index.
 - **Key Methods**:
   - **`__init__(self, model: LLMModel, db: ElasticsearchDatabase, prompts_manager: PromptsManager)`**
     - **Description**: Initializes the agent, its dependencies (model, db, prompts), the sub-agent (`ScrollGrokParserAgent`), and builds the LangGraph workflow.
@@ -174,9 +174,9 @@ This file contains agents responsible for parsing log data directly from Elastic
     - **Description**: Takes an initial configuration dictionary, transforms it into the required `SingleGroupParseGraphState`, invokes the compiled LangGraph, and returns the final state dictionary after the graph execution completes.
     - **Parameters**: `initial_config` (dict): Configuration passed from the orchestrator (e.g., `AllGroupsParserAgent`).
     - **Returns**: The final `SingleGroupParseGraphState`.
-  - **`_build_graph(self) -> CompiledGraph`**: Defines the nodes and edges of the LangGraph state machine (start -> generate -> validate -> parse | retry -> fallback -> END).
-  - **Graph Nodes** (`_start_node`, `_generate_grok_node`, `_validate_pattern_node`, `_parse_all_node`, `_fallback_node`, `_prepare_for_retry_node`): Implement the logic for each step in the workflow, updating the `SingleGroupParseGraphState`.
-  - **Conditional Edges** (`_decide_after_generate`, `_decide_after_validation`): Determine the next node based on the current state (e.g., validation success/failure, retries remaining).
+  - **`_build_graph(self) -> CompiledGraph`**: Defines the nodes and edges of the LangGraph state machine (start -> [generate | validate] -> validate -> [parse | retry] -> fallback -> store_results -> END).
+  - **Graph Nodes** (`_start_node`, `_generate_grok_node`, `_validate_pattern_node`, `_parse_all_node`, `_fallback_node`, `_prepare_for_retry_node`, `_store_results_node`): Implement the logic for each step in the workflow, updating the `SingleGroupParseGraphState`.
+  - **Conditional Edges** (`_decide_pattern_source`, `_decide_after_generate`, `_decide_after_validation`): Determine the next node based on the current state (e.g., pattern provided, validation success/failure, retries remaining).
 
 ### Class: `AllGroupsParserAgent`
 - **Purpose**: Orchestrates the parsing process across *all* log groups defined in the database. It fetches group information and uses a thread/process pool to run `SingleGroupParserAgent` instances concurrently for each group.
@@ -188,7 +188,7 @@ This file contains agents responsible for parsing log data directly from Elastic
     - **Parameters**:
       - `initial_state` (AllGroupsParserState): Basic initial state.
       - `num_threads` (int): Number of parallel workers.
-      - *Other parameters*: Batch sizes, sample sizes, thresholds, retries passed down to workers.
+      - *Other parameters*: Batch sizes, sample sizes, thresholds, retries, flags (`keep_unparsed_index`) passed down to workers.
     - **Returns**: The final `AllGroupsParserState` containing results for all groups.
   - **`_get_all_groups(self, group_info_index: str) -> List[Dict[str, Any]]`**: Fetches group definitions from ES.
 
