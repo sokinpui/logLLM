@@ -634,50 +634,62 @@ def register_es_parse_parser(subparsers):
             '-g', '--group', type=str, default=None,
             help='(Optional for run, Required for use) Specify a single group name.'
     )
+
     run_parser.add_argument(
             '-f', '--field', type=str, default='content',
             help='Source field containing the raw log line (default: content).'
     )
+
     run_parser.add_argument(
             '--copy-fields', type=str, nargs='*',
             help='(Optional) Additional source fields to copy to the target document.'
     )
+
     run_parser.add_argument(
             '-b', '--batch-size', type=int, default=1000,
             help='Documents to process/index per batch (default: 1000).'
     )
+
     run_parser.add_argument(
             '--keep-unparsed', action='store_true',
             help='Do not delete the unparsed log index before running.'
     )
+
     # Arguments specific to 'run'
     run_parser.add_argument(
             '-s', '--sample-size', type=int, default=20,
             help='Log lines to sample for LLM Grok pattern generation (default: 20).'
     )
+
     run_parser.add_argument(
             '--validation-sample-size', type=int, default=10,
             help='Number of lines for validating a generated Grok pattern (default: 10).'
     )
+
     run_parser.add_argument(
             '--validation-threshold', type=float, default=0.5,
             help='Minimum success rate (0.0-1.0) on validation sample to accept Grok pattern (default: 0.5).'
     )
+
     run_parser.add_argument(
             '--max-retries', type=int, default=2,
             help='Maximum number of times to retry Grok pattern generation if validation fails (default: 2).'
     )
+
     default_threads = 1
     try: max_threads = multiprocessing.cpu_count(); max_help = f"Max suggest: {max_threads}"
     except NotImplementedError: max_threads = 1; max_help = "Cannot determine max CPUs"
+
     run_parser.add_argument(
             '-t', '--threads', type=int, default=default_threads,
             help=f'Parallel workers for ALL groups (ignored for single group). Default: {default_threads}. {max_help}'
     )
+
     run_parser.add_argument(
         '-p', '--pattern', type=str, default=None,
         help='Provide a specific Grok pattern string to use for parsing. Requires --group to be specified.'
     )
+
     run_parser.set_defaults(func=handle_es_parse)
 
     # --- 'list' Subcommand ---
@@ -686,59 +698,71 @@ def register_es_parse_parser(subparsers):
         help='List results from previous es-parse runs',
         description=f"Queries the '{cfg.INDEX_GROK_RESULTS_HISTORY}' index to show past Grok parsing results."
     )
+
     list_parser.add_argument(
         '-g', '--group', type=str, default=None,
         help='(Optional) Show results only for a specific group name.'
     )
+
     list_parser.add_argument(
         '-a', '--all', action='store_true',
         help='Show all historical results for the selected group(s), instead of just the latest.'
     )
-    # New flags for list
-    list_output_group = list_parser.add_mutually_exclusive_group()
-    list_output_group.add_argument(
+
+    list_parser.add_argument(
         '--group-name', action='store_true',
         help='List only the names of groups found in the history.'
     )
-    list_output_group.add_argument(
+
+    list_parser.add_argument(
         '--json', action='store_true', # Changed from '-j' to avoid conflict with global -j
         help='Output the results in JSON format.'
     )
+
     list_parser.set_defaults(func=handle_es_parse_list)
 
     # --- 'use' Subcommand (NEW) ---
+
     use_parser = es_parse_subparsers.add_parser(
         'use',
         help='Re-run parsing for a group using a pattern from a specific past run',
         description="Finds a historical run by group and time, extracts the pattern, and re-runs parsing for that group."
     )
+
     use_parser.add_argument(
         '-g', '--group', type=str, required=True, # Group is required for 'use'
         help='The group name to re-run parsing for.'
     )
+
     use_parser.add_argument(
         '-t', '--time', type=str, required=True,
         help='Timestamp string (e.g., "2025-04-08 18:19:56") of the historical run to use the pattern from (copy from `list` output).'
     )
+
     # Add common optional args that might be useful to override defaults during 'use'
     use_parser.add_argument(
             '-f', '--field', type=str, # Default comes from handle_es_parse_use
             help='(Optional) Override source field containing the raw log line (default: content).'
     )
+
     use_parser.add_argument(
             '--copy-fields', type=str, nargs='*', # Default comes from handle_es_parse_use
             help='(Optional) Override additional source fields to copy.'
     )
+
     use_parser.add_argument(
             '-b', '--batch-size', type=int, # Default comes from handle_es_parse_use
             help='(Optional) Override documents per batch (default: 1000).'
     )
+
     use_parser.add_argument(
             '--validation-sample-size', type=int, # Default comes from handle_es_parse_use
             help='(Optional) Override validation sample size (default: 10).'
     )
+
     use_parser.add_argument(
             '--keep-unparsed', action='store_true', # Default comes from handle_es_parse_use
             help='(Optional) Do not delete the unparsed log index before running.'
     )
+
     use_parser.set_defaults(func=handle_es_parse_use)
