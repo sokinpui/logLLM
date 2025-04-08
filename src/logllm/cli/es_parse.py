@@ -4,6 +4,9 @@ import argparse
 import sys
 import multiprocessing
 import os # Import os for path manipulation if needed
+from typing import Dict, Any
+from datetime import datetime
+from elasticsearch import NotFoundError
 
 try:
     # Import agents - paths might need adjustment based on final structure
@@ -88,7 +91,7 @@ def handle_es_parse(args):
             }
 
             # Run the agent (which executes its internal graph)
-            final_group_state: SingleGroupParseGraphState = agent.run(single_group_config)
+            final_group_state: SingleGroupParseGraphState | Dict[str, Any] = agent.run(single_group_config)
 
             # --- Display Summary (Single Group - using new state) ---
             print("\n--- Elasticsearch Parsing Summary (Single Group) ---")
@@ -244,65 +247,250 @@ def handle_es_parse(args):
         import traceback
         traceback.print_exc()
 
+def _print_result_entry(doc_source: dict):
+    """Formats and prints a single entry from the grok_results_history index."""
+    group = doc_source.get("group_name", "N/A")
+    status = doc_source.get("parsing_status", "unknown")
+    pattern = doc_source.get("grok_pattern_used", "N/A")
+    timestamp_iso = doc_source.get("timestamp")
+    processed = doc_source.get("processed_count", 0)
+    successful = doc_source.get("successful_count", 0)
+    failed = doc_source.get("failed_count", 0) # Docs in failed index
+    parse_errors = doc_source.get("parse_error_count", 0) # Grok mismatches
+    index_errors = doc_source.get("index_error_count", 0) # Bulk errors
+    agent_errors = doc_source.get("agent_error_count", 0)
+
+    # Format timestamp
+    try:
+        if timestamp_iso:
+            dt_obj = datetime.fromisoformat(timestamp_iso)
+            timestamp_str = dt_obj.strftime("%Y-%m-%d %H:%M:%S %Z") # Example format
+        else:
+            timestamp_str = "N/A"
+    except ValueError:
+        timestamp_str = f"Invalid ({timestamp_iso})"
+
+    target_idx_name = cfg.get_parsed_log_storage_index(group)
+    # Use the RENAMED function for the unparsed index name
+    unparsed_idx_name = cfg.get_unparsed_log_storage_index(group)
+
+    print(f"\nGroup '{group}' (Recorded: {timestamp_str}):")
+    print(f"  Status: {status}")
+    print(f"  Pattern Detail: {pattern}")
+    print(f"  Docs Scanned: {processed}")
+    print(f"  Indexed Successfully (-> {os.path.basename(target_idx_name)}): {successful}")
+    # Updated print statement using the RENAMED config function name
+    print(f"  Failed/Fallback (-> {os.path.basename(unparsed_idx_name)}): {failed}")
+    print(f"  Grok Parse Errors: {parse_errors}, Bulk Index Errors: {index_errors}")
+    if agent_errors > 0:
+        print(f"  Agent Errors/Warnings: {agent_errors} (See logs for details)")
+
+# --- Handler for 'list' subcommand ---
+def handle_es_parse_list(args):
+    """Handles the logic for the 'es-parse list' command."""
+    logger.info(f"Executing es-parse list: group={args.group}, all_history={args.all}")
+    group_filter = args.group
+    show_all_history = args.all
+    history_index = cfg.INDEX_GROK_RESULTS_HISTORY
+
+    try:
+        db = ElasticsearchDatabase()
+        if db.instance is None:
+             logger.error("ES connection failed for listing results.")
+             print("Error: Could not connect to Elasticsearch.")
+             return
+
+        if not db.instance.indices.exists(index=history_index):
+            logger.warning(f"History index '{history_index}' not found.")
+            print(f"Error: Grok results history index '{history_index}' does not exist. Run 'es-parse run' first.")
+            return
+
+        results = []
+        search_params: Dict[str, Any] = {"index": history_index} # Type hint for clarity
+
+        # --- Determine the correct field name ---
+        group_field_name = "group_name" if group_filter and '.' in group_filter else "group_name.keyword"
+        # ----------------------------------------
+
+        if group_filter:
+            # --- Filter by Specific Group ---
+            logger.info(f"Fetching history for group: {group_filter} using field '{group_field_name}'")
+            search_params["body"] = {
+                # *** FIX HERE: Use the variable's value as the key ***
+                "query": {"term": {group_field_name: group_filter}},
+                "sort": [{"timestamp": "desc"}]
+            }
+            if show_all_history:
+                search_params["size"] = 1000
+                print(f"Fetching all history for group '{group_filter}'...")
+            else:
+                search_params["size"] = 1
+                print(f"Fetching latest result for group '{group_filter}'...")
+
+            response = db.instance.search(**search_params)
+            results = response['hits']['hits']
+
+        elif show_all_history:
+            # --- Fetch All History for All Groups ---
+            logger.info(f"Fetching all history for all groups using field '{group_field_name}' for sorting.")
+            print("Fetching all history entries for all groups...")
+            search_params["body"] = {
+                "query": {"match_all": {}},
+                # *** FIX HERE: Use the variable's value as the key ***
+                "sort": [
+                    {group_field_name: "asc"},
+                    {"timestamp": "desc"}
+                ]
+            }
+            search_params["size"] = 10000
+            logger.warning("Fetching all history for all groups might return a large number of results.")
+
+            response = db.instance.search(**search_params)
+            results = response['hits']['hits']
+
+        else:
+            # --- Fetch Latest Result for Each Group (Default) ---
+            logger.info(f"Fetching the latest result for each group using aggregation on field '{group_field_name}'.")
+            print("Fetching latest result for each group...")
+            search_params["body"] = {
+              "size": 0,
+              "aggs": {
+                "groups": {
+                  # *** FIX HERE: Use the variable's value for the field parameter ***
+                  "terms": {"field": group_field_name, "size": 1000},
+                  "aggs": {
+                    "latest_entry": {
+                      "top_hits": {
+                        "size": 1,
+                        "sort": [{"timestamp": {"order": "desc"}}],
+                        "_source": {"includes": ["*"]}
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            response = db.instance.search(**search_params)
+            # Extract results from aggregation buckets
+            results = [] # Ensure results is reset here
+            for bucket in response.get('aggregations', {}).get('groups', {}).get('buckets', []):
+                 latest_hit = bucket.get('latest_entry', {}).get('hits', {}).get('hits', [{}])[0]
+                 if latest_hit:
+                     results.append(latest_hit)
+            # Sort the final list by group name for consistent output order
+            results.sort(key=lambda x: x.get('_source', {}).get('group_name', ''))
+
+        # --- Print Results ---
+        if not results:
+            if group_filter: print(f"No history found for group '{group_filter}'.")
+            else: print(f"No history found in index '{history_index}'.")
+        else:
+            print(f"\n--- Grok Parsing History Results ({len(results)} entries) ---")
+            for hit in results:
+                 _print_result_entry(hit.get('_source', {}))
+            print("\n--- End of Results ---")
+
+    except NotFoundError:
+        logger.error(f"History index '{history_index}' not found during search.")
+        print(f"Error: Grok results history index '{history_index}' does not exist.")
+    except Exception as e:
+        logger.error(f"An error occurred during 'es-parse list': {e}", exc_info=True)
+        import traceback
+        traceback.print_exc()
+        print(f"\nAn error occurred while fetching history: {e}")
 
 def register_es_parse_parser(subparsers):
-    """Registers the 'es-parse' command and its arguments."""
+    """Registers the 'es-parse' command and its subcommands."""
     es_parse_parser = subparsers.add_parser(
         'es-parse',
-        help='Parse logs in ES using Grok (with validation/retry)',
-        description="Retrieves logs from source indices, generates/validates Grok patterns (with retries), parses logs, and indexes results into target indices."
+        help='Parse logs in ES using Grok or list past results', # Updated help
+        description="Processes logs stored in Elasticsearch using Grok patterns with validation and retries, or lists the results of previous runs." # Updated desc
+    )
+    es_parse_subparsers = es_parse_parser.add_subparsers(
+        dest='es_parse_action', help='ES Parsing action (run or list)', required=True
+        )
+
+    # --- 'run' Subcommand (The original parsing logic) ---
+    run_parser = es_parse_subparsers.add_parser(
+        'run',
+        help='Run the Grok parsing process on ES logs',
+        description="Retrieves logs from source indices, generates/validates Grok patterns, parses logs, and indexes results."
     )
 
-    # --- Existing Arguments ---
-    es_parse_parser.add_argument(
-        '-g', '--group', type=str, default=None,
-        help='(Optional) Specify a single group name to parse. If omitted, all groups are processed.'
-    )
-    es_parse_parser.add_argument(
-        '-f', '--field', type=str, default='content',
-        help='Source field containing the raw log line (default: content).'
-    )
-    es_parse_parser.add_argument(
-        '--copy-fields', type=str, nargs='*',
-        help='(Optional) Additional source fields to copy to the target document.'
-    )
-    es_parse_parser.add_argument(
-        '-b', '--batch-size', type=int, default=500, # Keep updated default
-        help='Documents to process/index per batch (default: 5000).'
-    )
-    es_parse_parser.add_argument(
-        '-s', '--sample-size', type=int, default=10, # Keep updated default
-        help='Log lines to sample for LLM Grok pattern generation (default: 20).'
+    # (Add all the arguments from the original es_parse_parser here)
+    run_parser.add_argument(
+            '-g', '--group', type=str, default=None,
+            help='(Optional) Specify a single group name to parse. If omitted, all groups are processed.'
     )
 
-    # --- NEW Arguments for Validation/Retry ---
-    es_parse_parser.add_argument(
-        '--validation-sample-size', type=int, default=10,
-        help='Number of lines to use for validating a generated Grok pattern (default: 10).'
-    )
-    es_parse_parser.add_argument(
-        '--validation-threshold', type=float, default=0.5,
-        help='Minimum success rate (0.0-1.0) on validation sample to accept Grok pattern (default: 0.5).'
-    )
-    es_parse_parser.add_argument(
-        '--max-retries', type=int, default=4, # Default to 4 retries
-        help='Maximum number of times to retry Grok pattern generation if validation fails (default: 2).'
+    run_parser.add_argument(
+            '-f', '--field', type=str, default='content',
+            help='Source field containing the raw log line (default: content).'
     )
 
-    # --- Threads Argument (Unchanged) ---
+    run_parser.add_argument(
+            '--copy-fields', type=str, nargs='*',
+            help='(Optional) Additional source fields to copy to the target document.'
+    )
+
+    run_parser.add_argument(
+            '-b', '--batch-size', type=int, default=5000,
+            help='Documents to process/index per batch (default: 5000).'
+    )
+
+    run_parser.add_argument(
+            '-s', '--sample-size', type=int, default=20,
+            help='Log lines to sample for LLM Grok pattern generation (default: 20).'
+    )
+
+    run_parser.add_argument(
+            '--validation-sample-size', type=int, default=10,
+            help='Number of lines for validating a generated Grok pattern (default: 10).'
+    )
+
+    run_parser.add_argument(
+            '--validation-threshold', type=float, default=0.5,
+            help='Minimum success rate (0.0-1.0) on validation sample to accept Grok pattern (default: 0.5).'
+    )
+
+    run_parser.add_argument(
+            '--max-retries', type=int, default=2,
+            help='Maximum number of times to retry Grok pattern generation if validation fails (default: 2).'
+    )
+
     default_threads = 1
-    try: max_threads = multiprocessing.cpu_count(); max_help = f"Max suggest: {max_threads}"
-    except NotImplementedError: max_threads = 1; max_help = "Cannot determine max CPUs"
-    es_parse_parser.add_argument(
-        '-t', '--threads', type=int, default=default_threads,
-        help=f'Parallel workers for ALL groups (ignored for single group). Default: {default_threads}. {max_help}'
+    try:
+        max_threads = multiprocessing.cpu_count()
+        max_help = f"Max suggest: {max_threads}"
+    except NotImplementedError:
+        max_threads = 1
+        max_help = "Cannot determine max CPUs"
+
+    run_parser.add_argument(
+            '-t', '--threads', type=int, default=default_threads,
+            help=f'Parallel workers for ALL groups (ignored for single group). Default: {default_threads}. {max_help}'
     )
 
-    es_parse_parser.add_argument(
-        '--keep-unparsed',
-        action='store_true', # Default is False (meaning delete)
-        help="Do not delete the corresponding 'unparsed_log_*' index before running. By default, the index is cleared."
+    run_parser.add_argument(
+            '--keep-unparsed', action='store_true',
+            help="Do not delete the corresponding 'unparsed_log_*' index before running."
+    )
+    run_parser.set_defaults(func=handle_es_parse) # Point 'run' action to the original handler
+
+    # --- 'list' Subcommand (NEW) ---
+    list_parser = es_parse_subparsers.add_parser(
+        'list',
+        help='List results from previous es-parse runs',
+        description=f"Queries the '{cfg.INDEX_GROK_RESULTS_HISTORY}' index to show past Grok parsing results. By default shows the latest result for each group."
     )
 
-    # Set the handler function
-    es_parse_parser.set_defaults(func=handle_es_parse)
+    list_parser.add_argument(
+        '-g', '--group', type=str, default=None,
+        help='(Optional) Show results only for a specific group name.'
+    )
+
+    list_parser.add_argument(
+        '-a', '--all', action='store_true',
+        help='Show all historical results for the selected group(s), instead of just the latest.'
+    )
+    list_parser.set_defaults(func=handle_es_parse_list) # Point 'list' action to the new handler
