@@ -2,14 +2,22 @@ from abc import ABC, abstractmethod
 import requests
 from elasticsearch import Elasticsearch, helpers
 from langchain_elasticsearch import ElasticsearchStore
-from typing import Callable, Iterator, Dict, Any, List, Optional, Tuple # Add necessary types
+from typing import (
+    Callable,
+    Iterator,
+    Dict,
+    Any,
+    List,
+    Optional,
+    Tuple,
+)  # Add necessary types
 
 
 from .logger import Logger
 from ..config import config as cfg
 
-class Database(ABC):
 
+class Database(ABC):
     @abstractmethod
     def insert(self, data: dict, identifier: str = None):
         """Insert data into the database. Identifier may specify a collection or index."""
@@ -35,6 +43,7 @@ class Database(ABC):
         """Set the vector store for the database."""
         pass
 
+
 class ElasticsearchDatabase(Database):
     """
     provide some simple interface for common operations,
@@ -46,14 +55,16 @@ class ElasticsearchDatabase(Database):
         self.instance = self._connect()
         self.vector_store = None
 
-    def insert(self, data : dict, index : str):
+    def insert(self, data: dict, index: str):
         if self.instance is None:
-            self._logger.error("Elasticsearch instance not initialized, please check if container is running")
+            self._logger.error(
+                "Elasticsearch instance not initialized, please check if container is running"
+            )
             print("please check if Container is running")
 
         self.instance.index(index=index, body=data)
 
-    def single_search(self, query : dict, index : str):
+    def single_search(self, query: dict, index: str):
         """
         return single search result
         """
@@ -64,7 +75,7 @@ class ElasticsearchDatabase(Database):
             exit(1)
 
         result = self.instance.search(index=index, body=query)
-        return result['hits']['hits']
+        return result["hits"]["hits"]
 
     def scroll_search(self, query: dict, index: str):
         """
@@ -90,12 +101,12 @@ class ElasticsearchDatabase(Database):
 
         all_hits = []
         try:
-             # Initial search with scroll
+            # Initial search with scroll
             resp = self.instance.search(
                 index=index,
                 body=query,
-                scroll="5m", # Keep scroll context alive longer
-                size=1000 # Fetch in chunks
+                scroll="5m",  # Keep scroll context alive longer
+                size=1000,  # Fetch in chunks
             )
             scroll_id = resp.get("_scroll_id")
             hits = resp["hits"]["hits"]
@@ -114,18 +125,26 @@ class ElasticsearchDatabase(Database):
                     self.instance.clear_scroll(scroll_id=scroll_id)
                 except Exception as clear_err:
                     # Log clearing error but don't necessarily fail the whole operation
-                    self._logger.warning(f"Failed to clear scroll context {scroll_id}: {clear_err}")
+                    self._logger.warning(
+                        f"Failed to clear scroll context {scroll_id}: {clear_err}"
+                    )
 
         except Exception as e:
-            self._logger.error(f"Error during scroll search on index '{index}': {e}", exc_info=True)
+            self._logger.error(
+                f"Error during scroll search on index '{index}': {e}", exc_info=True
+            )
             # Optionally re-raise or return partial results depending on desired behavior
             # Here, we return what we have gathered so far
             return all_hits
 
         return all_hits
 
-
-    def update(self, id : str, data : dict, index : str,):
+    def update(
+        self,
+        id: str,
+        data: dict,
+        index: str,
+    ):
         if self.instance is None:
             self._logger.error("Elasticsearch instance not initialized")
             print("please check if Container is running")
@@ -133,7 +152,7 @@ class ElasticsearchDatabase(Database):
 
         self.instance.update(index=index, body=data, id=id)
 
-    def delete(self, id : str, index : str):
+    def delete(self, id: str, index: str):
         if self.instance is None:
             self._logger.error("Elasticsearch instance not initialized")
             print("please check if Container is running")
@@ -165,7 +184,7 @@ class ElasticsearchDatabase(Database):
             self._logger.error(f"Error setting vector store: {e}")
             exit(1)
 
-    def random_sample(self, index : str, size : int):
+    def random_sample(self, index: str, size: int):
         """
         return random sample of all field and size from index
         the maximum size is 10000
@@ -173,14 +192,11 @@ class ElasticsearchDatabase(Database):
         query = {
             "size": size,
             "query": {
-                "function_score": {
-                    "query": {"match_all": {}},
-                    "random_score": {}
-                }
-            }
+                "function_score": {"query": {"match_all": {}}, "random_score": {}}
+            },
         }
         try:
-            return self.instance.search(index=index, body=query)['hits']['hits']
+            return self.instance.search(index=index, body=query)["hits"]["hits"]
         except Exception as e:
             self._logger.error(f"Error fetching random sample from index {index}: {e}")
             exit(1)
@@ -199,23 +215,19 @@ class ElasticsearchDatabase(Database):
         """
         # Step 1: Get the count of documents matching the filter
         try:
-            count_res = self.instance.count(index=index, body={"query": filter} if filter else None)
+            count_res = self.instance.count(
+                index=index, body={"query": filter} if filter else None
+            )
             count = count_res["count"]
         except Exception as e:
-            self._logger.error(f"Error counting documents for index {index} with filter {filter}: {e}")
+            self._logger.error(
+                f"Error counting documents for index {index} with filter {filter}: {e}"
+            )
             exit(1)
 
         # Step 2: Create the alias
         query = {
-            "actions": [
-                {
-                    "add": {
-                        "index": index,
-                        "alias": alias,
-                        "filter": filter
-                    }
-                }
-            ]
+            "actions": [{"add": {"index": index, "alias": alias, "filter": filter}}]
         }
         try:
             res = self.instance.indices.update_aliases(body=query)
@@ -225,12 +237,16 @@ class ElasticsearchDatabase(Database):
             exit(1)
 
     def count_docs(self, index: str, filter: dict = None):
-        resp = self.instance.count(index=index, body={"query": filter} if filter else None)
+        resp = self.instance.count(
+            index=index, body={"query": filter} if filter else None
+        )
 
-        count = resp['count']
+        count = resp["count"]
         return count
 
-    def get_unique_values_composite(self, index: str, field: str, page_size=1000, sort_order="asc"):
+    def get_unique_values_composite(
+        self, index: str, field: str, page_size=1000, sort_order="asc"
+    ):
         """
         Retrieves unique values from a field in Elasticsearch using the composite aggregation.
         Returns all unique values in the field.
@@ -255,10 +271,15 @@ class ElasticsearchDatabase(Database):
                         "unique_values": {
                             "composite": {
                                 "sources": [
-                                    {field: {
-                                        "terms": {"field": field, "order": sort_order},
+                                    {
+                                        field: {
+                                            "terms": {
+                                                "field": field,
+                                                "order": sort_order,
+                                            },
+                                        }
                                     }
-                                }],
+                                ],
                                 "size": page_size,
                             }
                         }
@@ -306,14 +327,15 @@ class ElasticsearchDatabase(Database):
                         "terms": {
                             "field": field,
                             "size": size,
-                            "order": {"_key": sort_order}
+                            "order": {"_key": sort_order},
                         }
                     }
                 },
             )
 
             unique_values = [
-                bucket["key"] for bucket in response["aggregations"]["unique_values"]["buckets"]
+                bucket["key"]
+                for bucket in response["aggregations"]["unique_values"]["buckets"]
             ]
             return unique_values
 
@@ -322,94 +344,105 @@ class ElasticsearchDatabase(Database):
             return []
 
     def scroll_and_process_batches(
-            self,
-            index: str,
-            query: Dict[str, Any],
-            batch_size: int,
-            process_batch_func: Callable[[List[Dict[str, Any]]], bool],
-            source_fields: Optional[List[str]] = None,
-            scroll_context_time: str = "5m"
-        ) -> Tuple[int, int]:
-            """
-            Scrolls through documents matching a query and processes them in batches.
+        self,
+        index: str,
+        query: Dict[str, Any],
+        batch_size: int,
+        process_batch_func: Callable[[List[Dict[str, Any]]], bool],
+        source_fields: Optional[List[str]] = None,
+        scroll_context_time: str = "5m",
+    ) -> Tuple[int, int]:
+        """
+        Scrolls through documents matching a query and processes them in batches.
 
-            Args:
-                index: The index to search.
-                query: The Elasticsearch query body.
-                batch_size: The number of documents to process in each batch.
-                process_batch_func: A function that takes a list of hits
-                                    (each hit is a dict like response['hits']['hits'][n])
-                                    and processes them. It should return True to continue
-                                    scrolling, False to stop early.
-                source_fields: Optional list of fields to retrieve (_source). If None, retrieves all.
-                scroll_context_time: How long the scroll context should be kept alive.
+        Args:
+            index: The index to search.
+            query: The Elasticsearch query body.
+            batch_size: The number of documents to process in each batch.
+            process_batch_func: A function that takes a list of hits
+                                (each hit is a dict like response['hits']['hits'][n])
+                                and processes them. It should return True to continue
+                                scrolling, False to stop early.
+            source_fields: Optional list of fields to retrieve (_source). If None, retrieves all.
+            scroll_context_time: How long the scroll context should be kept alive.
 
-            Returns:
-                A tuple (total_processed, total_hits). total_processed might be less
-                than total_hits if process_batch_func returned False.
-            """
-            if self.instance is None:
-                self._logger.error("Elasticsearch instance not initialized.")
-                return 0, 0
+        Returns:
+            A tuple (total_processed, total_hits). total_processed might be less
+            than total_hits if process_batch_func returned False.
+        """
+        if self.instance is None:
+            self._logger.error("Elasticsearch instance not initialized.")
+            return 0, 0
 
-            total_processed = 0
-            total_hits_estimate = 0
-            scroll_id = None
+        total_processed = 0
+        total_hits_estimate = 0
+        scroll_id = None
 
-            try:
-                search_args = {
-                    "index": index,
-                    "scroll": scroll_context_time,
-                    "size": batch_size,
-                    "body": query,
-                }
-                if source_fields is not None:
-                     search_args["_source"] = source_fields # Specify fields to retrieve
+        try:
+            search_args = {
+                "index": index,
+                "scroll": scroll_context_time,
+                "size": batch_size,
+                "body": query,
+            }
+            if source_fields is not None:
+                search_args["_source"] = source_fields  # Specify fields to retrieve
 
-                response = self.instance.search(**search_args)
-                scroll_id = response.get('_scroll_id')
-                hits = response['hits']['hits']
-                total_hits_estimate = response['hits']['total']['value']
-                self._logger.info(f"Scroll initiated on index '{index}'. Estimated total hits: {total_hits_estimate}. Batch size: {batch_size}.")
+            response = self.instance.search(**search_args)
+            scroll_id = response.get("_scroll_id")
+            hits = response["hits"]["hits"]
+            total_hits_estimate = response["hits"]["total"]["value"]
+            self._logger.info(
+                f"Scroll initiated on index '{index}'. Estimated total hits: {total_hits_estimate}. Batch size: {batch_size}."
+            )
 
-                while scroll_id and hits:
-                    self._logger.debug(f"Processing batch of {len(hits)} documents...")
-                    # Process the current batch of hits
-                    should_continue = process_batch_func(hits)
-                    total_processed += len(hits)
+            while scroll_id and hits:
+                self._logger.debug(f"Processing batch of {len(hits)} documents...")
+                # Process the current batch of hits
+                should_continue = process_batch_func(hits)
+                total_processed += len(hits)
 
-                    if not should_continue:
-                        self._logger.warning("Processing function requested early stop.")
-                        break
+                if not should_continue:
+                    self._logger.warning("Processing function requested early stop.")
+                    break
 
-                    # Fetch the next batch
-                    response = self.instance.scroll(scroll_id=scroll_id, scroll=scroll_context_time)
-                    scroll_id = response.get('_scroll_id')
-                    hits = response['hits']['hits']
+                # Fetch the next batch
+                response = self.instance.scroll(
+                    scroll_id=scroll_id, scroll=scroll_context_time
+                )
+                scroll_id = response.get("_scroll_id")
+                hits = response["hits"]["hits"]
 
-            except Exception as e:
-                self._logger.error(f"Error during scroll/batch processing on index '{index}': {e}", exc_info=True)
-                # Returns counts processed so far before the error
+        except Exception as e:
+            self._logger.error(
+                f"Error during scroll/batch processing on index '{index}': {e}",
+                exc_info=True,
+            )
+            # Returns counts processed so far before the error
 
-            finally:
-                # Clear the scroll context
-                if scroll_id:
-                    try:
-                        self.instance.clear_scroll(scroll_id=scroll_id)
-                        self._logger.debug(f"Scroll context {scroll_id} cleared.")
-                    except Exception as clear_err:
-                        self._logger.warning(f"Failed to clear scroll context {scroll_id}: {clear_err}")
+        finally:
+            # Clear the scroll context
+            if scroll_id:
+                try:
+                    self.instance.clear_scroll(scroll_id=scroll_id)
+                    self._logger.debug(f"Scroll context {scroll_id} cleared.")
+                except Exception as clear_err:
+                    self._logger.warning(
+                        f"Failed to clear scroll context {scroll_id}: {clear_err}"
+                    )
 
-            self._logger.info(f"Finished scroll/batch processing on index '{index}'. Total documents processed: {total_processed}")
-            return total_processed, total_hits_estimate
+        self._logger.info(
+            f"Finished scroll/batch processing on index '{index}'. Total documents processed: {total_processed}"
+        )
+        return total_processed, total_hits_estimate
 
     # --- NEW METHOD for Bulk Indexing ---
     def bulk_operation(
-            self,
-            actions: List[Dict[str, Any]],
-            raise_on_error: bool = False,
-            **kwargs # Allow passing other helpers.bulk kwargs like request_timeout
-        ) -> Tuple[int, List[Dict[str, Any]]]:
+        self,
+        actions: List[Dict[str, Any]],
+        raise_on_error: bool = False,
+        **kwargs,  # Allow passing other helpers.bulk kwargs like request_timeout
+    ) -> Tuple[int, List[Dict[str, Any]]]:
         """
         Performs a bulk operation (index, update, delete) using pre-formatted actions.
 
@@ -427,56 +460,78 @@ class ElasticsearchDatabase(Database):
             Each error dict contains details about the failed operation.
         """
         if self.instance is None:
-            self._logger.error("Elasticsearch instance not initialized. Cannot perform bulk operation.")
+            self._logger.error(
+                "Elasticsearch instance not initialized. Cannot perform bulk operation."
+            )
             return 0, [{"error": "Elasticsearch connection failed"}]
         if not actions:
             self._logger.info("No actions provided for bulk operation.")
             return 0, []
 
         # Set default timeout if not provided
-        if 'request_timeout' not in kwargs:
-             kwargs['request_timeout'] = 120 # Increase default timeout for potentially larger bulk updates
+        if "request_timeout" not in kwargs:
+            kwargs["request_timeout"] = (
+                120  # Increase default timeout for potentially larger bulk updates
+            )
 
         try:
-            self._logger.debug(f"Performing bulk operation with {len(actions)} actions...")
+            self._logger.debug(
+                f"Performing bulk operation with {len(actions)} actions..."
+            )
             # Pass the actions list directly to helpers.bulk
             success_count, errors = helpers.bulk(
                 self.instance,
-                actions, # Pass the pre-formatted actions
+                actions,  # Pass the pre-formatted actions
                 raise_on_error=raise_on_error,
                 raise_on_exception=raise_on_error,
-                **kwargs # Pass additional arguments like timeout
+                **kwargs,  # Pass additional arguments like timeout
             )
             if errors:
-                 self._logger.error(f"Encountered {len(errors)} errors during bulk operation.")
-                 for i, err in enumerate(errors[:5]): self._logger.error(f"Bulk Error {i+1}/{len(errors)}: {err}")
-            self._logger.debug(f"Bulk operation completed. Successes: {success_count}, Errors: {len(errors)}")
+                self._logger.error(
+                    f"Encountered {len(errors)} errors during bulk operation."
+                )
+                for i, err in enumerate(errors[:5]):
+                    self._logger.error(f"Bulk Error {i + 1}/{len(errors)}: {err}")
+            self._logger.debug(
+                f"Bulk operation completed. Successes: {success_count}, Errors: {len(errors)}"
+            )
             return success_count, errors
         except helpers.BulkIndexError as e:
-             self._logger.error(f"Bulk operation failed with BulkIndexError: {len(e.errors)} errors.", exc_info=True)
-             return 0, e.errors
+            self._logger.error(
+                f"Bulk operation failed with BulkIndexError: {len(e.errors)} errors.",
+                exc_info=True,
+            )
+            return 0, e.errors
         except Exception as e:
-            self._logger.error(f"Unexpected error during bulk operation: {e}", exc_info=True)
+            self._logger.error(
+                f"Unexpected error during bulk operation: {e}", exc_info=True
+            )
             return 0, [{"error": "Unexpected bulk operation error", "details": str(e)}]
 
     # --- (Optional) Keep the old bulk_index for simple cases or deprecate it ---
     def bulk_index(
-            self,
-            actions: List[Dict[str, Any]],
-            index: str,
-            raise_on_error: bool = False
-        ) -> Tuple[int, List[Dict[str, Any]]]:
+        self, actions: List[Dict[str, Any]], index: str, raise_on_error: bool = False
+    ) -> Tuple[int, List[Dict[str, Any]]]:
         """
         [DEPRECATED - Use bulk_operation for more flexibility]
         Performs a simple bulk indexing operation.
         """
-        self._logger.warning("Method 'bulk_index' is deprecated. Use 'bulk_operation' with formatted actions.")
+        self._logger.warning(
+            "Method 'bulk_index' is deprecated. Use 'bulk_operation' with formatted actions."
+        )
         formatted_actions = [{"_index": index, "_source": doc} for doc in actions]
-        return self.bulk_operation(actions=formatted_actions, raise_on_error=raise_on_error)
-
+        return self.bulk_operation(
+            actions=formatted_actions, raise_on_error=raise_on_error
+        )
 
     # --- REFINED/NEW Sampling Method ---
-    def get_sample_lines(self, index: str, field: str, sample_size: int, query: Optional[Dict[str, Any]] = None) -> List[str]:
+    def get_sample_lines(
+        self,
+        index: str,
+        field: str,
+        sample_size: int,
+        query: Optional[Dict[str, Any]] = None,
+    ) -> List[str]:
         """
         Retrieves a random sample of values from a specific field in an index,
         optionally matching a query.
@@ -498,9 +553,9 @@ class ElasticsearchDatabase(Database):
 
         # Ensure query is valid
         if query is None:
-             search_query = {"match_all": {}}
+            search_query = {"match_all": {}}
         else:
-             search_query = query
+            search_query = query
 
         # Use function_score with random_score for sampling
         es_query = {
@@ -508,22 +563,31 @@ class ElasticsearchDatabase(Database):
             "query": {
                 "function_score": {
                     "query": search_query,
-                    "random_score": {} # Provides random scoring
+                    "random_score": {},  # Provides random scoring
                 }
             },
-            "_source": [field] # Only fetch the required field
+            "_source": [field],  # Only fetch the required field
         }
 
         try:
-            self._logger.debug(f"Fetching {sample_size} random samples of field '{field}' from index '{index}'...")
+            self._logger.debug(
+                f"Fetching {sample_size} random samples of field '{field}' from index '{index}'..."
+            )
             response = self.instance.search(index=index, body=es_query)
-            hits = response['hits']['hits']
+            hits = response["hits"]["hits"]
             # Extract the content from the specified field
-            samples = [hit['_source'][field] for hit in hits if field in hit.get('_source', {})]
-            self._logger.info(f"Retrieved {len(samples)} samples for field '{field}' from index '{index}'.")
+            samples = [
+                hit["_source"][field] for hit in hits if field in hit.get("_source", {})
+            ]
+            self._logger.info(
+                f"Retrieved {len(samples)} samples for field '{field}' from index '{index}'."
+            )
             return samples
         except Exception as e:
-            self._logger.error(f"Error fetching random samples for field '{field}' from index '{index}': {e}", exc_info=True)
+            self._logger.error(
+                f"Error fetching random samples for field '{field}' from index '{index}': {e}",
+                exc_info=True,
+            )
             return []
 
 
@@ -537,15 +601,13 @@ def main():
     res = es.random_sample("log_ssh", 500)
 
     for r in res:
-        sample.append(r['_source']["content"])
+        sample.append(r["_source"]["content"])
 
     for r in res:
-        sample.append(r['_source']["content"])
+        sample.append(r["_source"]["content"])
 
     print(f"total tokens: {model.token_count(str(sample))}")
 
 
-
 if __name__ == "__main__":
     main()
-

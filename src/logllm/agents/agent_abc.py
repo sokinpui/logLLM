@@ -1,13 +1,14 @@
 from abc import ABC, abstractmethod
 from langgraph.graph.state import CompiledStateGraph
 
+
 def add_string_message(left: list[str], right: str | list[str]) -> list[str]:
     if isinstance(right, str):
         return left + [right]
     return left + right
 
-class Agent(ABC):
 
+class Agent(ABC):
     graph: CompiledStateGraph
 
     @abstractmethod
@@ -21,4 +22,3 @@ class Agent(ABC):
     @abstractmethod
     async def arun(self):
         pass
-
