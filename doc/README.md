@@ -3,7 +3,7 @@
 - [graph.md](./graph.md): Offers an overview of the main entry point (graph.py) that orchestrates the multi-agent system
   - High-level description of how graph.py integrates multiple agents into a unified workflow.
 
-- [configurations.md](./configurations.md): explain all configurations used
+- [configurable.md](./configurable.md): explain all configurations used
   - Explanation of the configuration module (e.g., config.py) and its variables (e.g., logging, Docker, database settings).
 
 - [utils.md](./utils.md): Documents utility classes and functions that support the core functionality of logLLM
