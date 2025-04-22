@@ -15,7 +15,6 @@ from .data_struct import LogFile, Event
 
 
 class Collector:
-
     def __init__(self, dir: str):
         self._logger = Logger()
         self._dir = dir
@@ -25,17 +24,13 @@ class Collector:
         groups = self.group_files(self.collected_files)
         self.insert_group_to_db(groups, _db)
 
-    def insert_group_to_db(self, groups : dict[str, list[str]], db: Database):
+    def insert_group_to_db(self, groups: dict[str, list[str]], db: Database):
         ## delete the index
         db.instance.indices.delete(index=cfg.INDEX_GROUP_INFOS, ignore=[400, 404])
         id = 0
         for group, files in groups.items():
             print(group)
-            doc = {
-                "group": group,
-                "files": files,
-                "id": id
-            }
+            doc = {"group": group, "files": files, "id": id}
             id += 1
             db.insert(doc, cfg.INDEX_GROUP_INFOS)
 
@@ -53,15 +48,13 @@ class Collector:
         return group
 
     def collect_logs(self, directory: str) -> list[LogFile]:
-
         # remove the tailing slash
-        directory = directory.rstrip('/')
+        directory = directory.rstrip("/")
 
         log_files = []
 
         for item in os.listdir(directory):
-
-            if item.startswith('.'):
+            if item.startswith("."):
                 continue
 
             item_path = os.path.join(directory, item)
@@ -74,7 +67,7 @@ class Collector:
                 continue
 
             for root, dirs, files in os.walk(item_path):
-                dirs[:] = [d for d in dirs if not d.startswith('.')]
+                dirs[:] = [d for d in dirs if not d.startswith(".")]
 
                 for log in files:
                     if log.lower().endswith(".log"):
@@ -93,7 +86,7 @@ class Collector:
     def collect_events(self, file: str) -> list[Event]:
         events = []
 
-        with open(file, 'r') as f:
+        with open(file, "r") as f:
             lines = f.readlines()
 
         # grouping lines into events, split by empty line
@@ -113,10 +106,14 @@ class Collector:
     def insert_events_to_db(self, db: Database, events: list[Event]):
         # clear old record
         try:
-            db.instance.indices.delete(index=cfg.INDEX_EVENTS_STORAGE, ignore=[400, 404])
+            db.instance.indices.delete(
+                index=cfg.INDEX_EVENTS_STORAGE, ignore=[400, 404]
+            )
         except Exception as e:
             self._logger.error(f"Error deleting events index: {e}")
-            print("Please check if the index exists and the connection to the Elasticsearch")
+            print(
+                "Please check if the index exists and the connection to the Elasticsearch"
+            )
             exit(1)
 
         for event in events:
@@ -132,10 +129,12 @@ class Collector:
             try:
                 last_line_read = self._get_last_line_read(log, db)
             except Exception as e:
-                self._logger.info(f"Error getting last line read for log file {log.name}: {e}")
+                self._logger.info(
+                    f"Error getting last line read for log file {log.name}: {e}"
+                )
                 last_line_read = 0
 
-            with open(log.name, 'r') as f:
+            with open(log.name, "r") as f:
                 file_lines = f.readlines()
 
             if last_line_read > len(file_lines):
@@ -144,18 +143,24 @@ class Collector:
             for i in range(last_line_read, len(file_lines)):
                 line = file_lines[i]
                 line_of_log = data_struct.LineOfLogFile(
-                        content=line,
-                        line_number=i,
-                        name=log.name,
-                        id=log.id,
-                        timestamp=datetime.now()
+                    content=line,
+                    line_number=i,
+                    name=log.name,
+                    id=log.id,
+                    timestamp=datetime.now(),
                 )
-                db.insert(line_of_log.to_dict(), cfg.get_log_stroage_index(log.belongs_to))
+                db.insert(
+                    line_of_log.to_dict(), cfg.get_log_stroage_index(log.belongs_to)
+                )
             self._save_last_line_read(log, db, len(file_lines))
 
-            self._logger.info(f"collector: Inserted {len(file_lines) - last_line_read} lines of {log.name}, range: {last_line_read} - {len(file_lines)}")
+            self._logger.info(
+                f"collector: Inserted {len(file_lines) - last_line_read} lines of {log.name}, range: {last_line_read} - {len(file_lines)}"
+            )
 
-    def insert_very_large_logs_into_db(self, db: ElasticsearchDatabase, files: list[LogFile]):
+    def insert_very_large_logs_into_db(
+        self, db: ElasticsearchDatabase, files: list[LogFile]
+    ):
         """
         support for file append more line later,
         but don't support modified line being recorded
@@ -163,46 +168,45 @@ class Collector:
         from elasticsearch import helpers
 
         for file in files:
-            batch_size = 1000 # number of lines insert at once
+            batch_size = 1000  # number of lines insert at once
             actions = []
 
             try:
                 count = 0
 
-                with open(file.path, 'r') as f:
-
+                with open(file.path, "r") as f:
                     try:
                         last_line_read = self._get_last_line_read(file, db)
                     except Exception as e:
-                        self._logger.info(f"Error getting last line read for log file {file.path}: {e}")
+                        self._logger.info(
+                            f"Error getting last line read for log file {file.path}: {e}"
+                        )
                         last_line_read = 0
 
                     for line in f:
-
                         # skip lines read before
                         if count < last_line_read:
                             count += 1
                             continue
 
                         line_of_log = data_struct.LineOfLogFile(
-                                content=line,
-                                line_number=count,
-                                name=file.path,
-                                id=file.id,
-                                timestamp=datetime.now()
+                            content=line,
+                            line_number=count,
+                            name=file.path,
+                            id=file.id,
+                            timestamp=datetime.now(),
                         )
 
                         action = {
                             "_index": "log_" + file.belongs_to,
-                            "_source": line_of_log.to_dict()
-
+                            "_source": line_of_log.to_dict(),
                         }
                         actions.append(action)
 
                         # if the number of actions reaches the batch size, insert them into the database
                         if len(actions) >= batch_size:
                             helpers.bulk(db.instance, actions)
-                            actions = [] # clear the actions list
+                            actions = []  # clear the actions list
 
                         count += 1
 
@@ -212,7 +216,9 @@ class Collector:
 
                 total_lines_procced = count - last_line_read
                 if total_lines_procced > 0:
-                    self._logger.info(f"collector: Inserted {total_lines_procced} lines of {file.path}:id {file.id}, range: {last_line_read} - {count}")
+                    self._logger.info(
+                        f"collector: Inserted {total_lines_procced} lines of {file.path}:id {file.id}, range: {last_line_read} - {count}"
+                    )
 
                 self._save_last_line_read(file, db, count)
 
@@ -220,44 +226,32 @@ class Collector:
                 self._logger.error(f"Error inserting lines of {file.path}: {e}")
                 exit(1)
 
-
-
     def _get_last_line_read(self, log_file: LogFile, db: Database) -> int:
-        query = {
-            "query": {
-                "match": {
-                    "id": log_file.id
-                }
-            },
-            "_source": ["last_line_read"]
-        }
-        last_line_status = db.single_search(query=query, index=cfg.INDEX_LAST_LINE_STATUS)
+        query = {"query": {"match": {"id": log_file.id}}, "_source": ["last_line_read"]}
+        last_line_status = db.single_search(
+            query=query, index=cfg.INDEX_LAST_LINE_STATUS
+        )
         if last_line_status:
-            return last_line_status[0]['_source']['last_line_read']
+            return last_line_status[0]["_source"]["last_line_read"]
         else:
             return 0
 
     def _save_last_line_read(self, log_file: LogFile, db: Database, line_number: int):
         last_line_status = data_struct.LastLineRead(
-                last_line_read=line_number,
-                id=log_file.id,
-                name=log_file.path
+            last_line_read=line_number, id=log_file.id, name=log_file.path
         )
-        update_data = {
-            "doc": last_line_status.to_dict(),
-            "doc_as_upsert": True
-        }
+        update_data = {"doc": last_line_status.to_dict(), "doc_as_upsert": True}
 
         try:
             db.update(
-                    index=cfg.INDEX_LAST_LINE_STATUS,
-                    id=log_file.id,
-                    data=update_data
-                    )
+                index=cfg.INDEX_LAST_LINE_STATUS, id=log_file.id, data=update_data
+            )
         except NotFoundError:
             db.insert(data=last_line_status.to_dict(), index=cfg.INDEX_LAST_LINE_STATUS)
         except Exception as e:
-            self._logger.error(f"Error updating last line read for log file {log_file.path}: {e}")
+            self._logger.error(
+                f"Error updating last line read for log file {log_file.path}: {e}"
+            )
             exit(1)
 
     def _clear_records(self, db: Database):
@@ -265,16 +259,21 @@ class Collector:
         prepare for interface later to change if file is being modified
         """
         try:
-            db.instance.indices.delete(index=cfg.INDEX_LOG_FILES_STORAGE, ignore=[400, 404])
-            db.instance.indices.delete(index=cfg.INDEX_LAST_LINE_STATUS, ignore=[400, 404])
+            db.instance.indices.delete(
+                index=cfg.INDEX_LOG_FILES_STORAGE, ignore=[400, 404]
+            )
+            db.instance.indices.delete(
+                index=cfg.INDEX_LAST_LINE_STATUS, ignore=[400, 404]
+            )
         except Exception as e:
             self._logger.error(f"Error deleting log files index: {e}")
-            print("Please check if the index exists and the connection to the Elasticsearch")
+            print(
+                "Please check if the index exists and the connection to the Elasticsearch"
+            )
             exit(1)
 
+
 def main():
-
-
     es_db = ElasticsearchDatabase()
 
     dir = "../log/"

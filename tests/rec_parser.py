@@ -4,6 +4,7 @@ from logllm.utils.llm_model import GeminiModel
 from logllm.utils.database import ElasticsearchDatabase
 from logllm.agents.parser_agent import RecursiveDrainLogParserAgent
 
+
 def test_recursive_agent():
     model = GeminiModel()
     db = ElasticsearchDatabase()
@@ -19,7 +20,10 @@ def test_recursive_agent():
 
     print(f"Processed {len(result['processed_files'])} files:")
     for file_info in result["processed_files"]:
-        print(f"Log: {file_info['path']}, CSV: {file_info['csv_path']}, Group: {file_info['group']}")
+        print(
+            f"Log: {file_info['path']}, CSV: {file_info['csv_path']}, Group: {file_info['group']}"
+        )
+
 
 if __name__ == "__main__":
     test_recursive_agent()

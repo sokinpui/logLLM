@@ -4,10 +4,12 @@ from dataclasses import dataclass, asdict
 from .database import ElasticsearchDatabase as eldb
 from ..config import config as cfg
 
+
 @dataclass
 class BaseData:
     def to_dict(self):
         return asdict(self)
+
 
 @dataclass
 class LineOfLogFile(BaseData):
@@ -20,9 +22,12 @@ class LineOfLogFile(BaseData):
     def to_dict(self):
         data = asdict(self)
         # Convert datetime objects to strings
-        if isinstance(data['timestamp'], datetime):
-            data['timestamp'] = data['timestamp'].isoformat()  # Convert to ISO 8601 format
+        if isinstance(data["timestamp"], datetime):
+            data["timestamp"] = data[
+                "timestamp"
+            ].isoformat()  # Convert to ISO 8601 format
         return data
+
 
 @dataclass
 class LastLineRead(BaseData):
@@ -30,11 +35,11 @@ class LastLineRead(BaseData):
     id: int
     name: str
 
-class LogFile:
 
+class LogFile:
     file_id = 0
 
-    def __init__(self, filename : str, parent: str):
+    def __init__(self, filename: str, parent: str):
         self.id = LogFile.file_id
         LogFile.file_id += 1
 
@@ -51,20 +56,17 @@ class LogFile:
         return self.__dict__
 
     def get_total_lines(self, db: eldb) -> int:
-        search_query = {
-        "query": {
-            "term": {
-                "id": self.id
-                }
-            }
-        }
+        search_query = {"query": {"term": {"id": self.id}}}
 
-        count_response = db.instance.search(index=cfg.INDEX_LOG_FILES_STORAGE, body=search_query, size=0)
+        count_response = db.instance.search(
+            index=cfg.INDEX_LOG_FILES_STORAGE, body=search_query, size=0
+        )
 
-        return count_response['hits']['total']['value']
+        return count_response["hits"]["total"]["value"]
 
-    def get_snapshot(self, id: int, earliest_timestamp: datetime, start: int, size: int, db: eldb) -> str | None:
-
+    def get_snapshot(
+        self, id: int, earliest_timestamp: datetime, start: int, size: int, db: eldb
+    ) -> str | None:
         """
         Get a snapshot of the log file from the database
         can return random snapshot, by providing random start and well defined size
@@ -75,21 +77,29 @@ class LogFile:
             "query": {
                 "bool": {
                     "must": [
-                        {"range": {"timestamp": {"gt": earliest_timestamp.strftime("%Y-%m-%dT%H:%M:%S")}}},
-                        {"match": {"id": id}}
+                        {
+                            "range": {
+                                "timestamp": {
+                                    "gt": earliest_timestamp.strftime(
+                                        "%Y-%m-%dT%H:%M:%S"
+                                    )
+                                }
+                            }
+                        },
+                        {"match": {"id": id}},
                     ]
                 }
             },
-            "sort": [{"line_number": "asc"}],  # Sort by line number instead of timestamp
-            "_source": ["line_number", "content"]  # Only fetch necessary fields
+            "sort": [
+                {"line_number": "asc"}
+            ],  # Sort by line number instead of timestamp
+            "_source": ["line_number", "content"],  # Only fetch necessary fields
         }
 
         # use scroll api to fetch all lines
         response = db.instance.search(
-                index=cfg.INDEX_LOG_FILES_STORAGE,
-                body=query,
-                scroll="2m"
-                )
+            index=cfg.INDEX_LOG_FILES_STORAGE, body=query, scroll="2m"
+        )
         scroll_id = response["_scroll_id"]
         scroll_size = len(response["hits"]["hits"])
 
@@ -122,19 +132,19 @@ class LogFile:
 
         return to_string(snapshot)
 
-class Event:
 
+class Event:
     event_id = 0
 
-    def __init__(self, description : str):
+    def __init__(self, description: str):
         Event.event_id += 1
         self.id = Event.event_id
         self.description = description
         self.related_files = []
 
-
     def to_dict(self) -> dict:
         return self.__dict__
+
 
 def main():
     pass
@@ -142,4 +152,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

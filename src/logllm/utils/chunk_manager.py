@@ -2,6 +2,7 @@ from typing import Any, Callable
 
 from .database import ElasticsearchDatabase
 
+
 class ESTextChunkManager:
     """
     Manage the chunk of text to analyze.
@@ -13,7 +14,8 @@ class ESTextChunkManager:
         index: index of the document
         db: ElasticsearchDatabase instance
     """
-    def __init__(self, id: Any, field : str, index: str, db: ElasticsearchDatabase):
+
+    def __init__(self, id: Any, field: str, index: str, db: ElasticsearchDatabase):
         self.id = id
         self.field = field
         self._index = index
@@ -27,7 +29,14 @@ class ESTextChunkManager:
         self.hits_in_current_chunk = 0
         self.current_chunk: str | None = None
 
-    def _build_chunk(self, initial_size: int, start: int, hits: list, max_len: int, len_fn: Callable[[str], int]) -> str:
+    def _build_chunk(
+        self,
+        initial_size: int,
+        start: int,
+        hits: list,
+        max_len: int,
+        len_fn: Callable[[str], int],
+    ) -> str:
         """
         Build the chunk of text from the hits
 
@@ -76,14 +85,7 @@ class ESTextChunkManager:
         """
         Get all the hits from the Elasticsearch
         """
-        query = {
-            "query": {
-                "match": {
-                    "id": self.id
-                }
-            },
-            "_source": [self.field]
-        }
+        query = {"query": {"match": {"id": self.id}}, "_source": [self.field]}
 
         return self._db.scroll_search(index=self._index, query=query)
 
@@ -121,7 +123,13 @@ class ESTextChunkManager:
     def get_current_chunk(self) -> str | None:
         return self.current_chunk
 
-def test_chunk_manager(chunk_manager: ESTextChunkManager, max_tokens: int, token_count: Callable[[str], int], model):
+
+def test_chunk_manager(
+    chunk_manager: ESTextChunkManager,
+    max_tokens: int,
+    token_count: Callable[[str], int],
+    model,
+):
     """
     Test function to loop through all hits and print the state of each loop.
 
@@ -141,9 +149,12 @@ def test_chunk_manager(chunk_manager: ESTextChunkManager, max_tokens: int, token
             break
 
         # Print the state of the loop
-        print(f"Start index: {chunk_manager.start}, hits in this round: {chunk_manager.hits_in_current_chunk}, Chunk token length: {model.token_count(chunk)}")
+        print(
+            f"Start index: {chunk_manager.start}, hits in this round: {chunk_manager.hits_in_current_chunk}, Chunk token length: {model.token_count(chunk)}"
+        )
 
     print("Test complete. All hits processed.")
+
 
 def main():
     import config as cfg
@@ -153,7 +164,9 @@ def main():
     db = ElasticsearchDatabase()
 
     model = GeminiModel()
-    chunk_manager = ESTextChunkManager(id=6, field="content", index=cfg.get_pre_process_index(1), db=db)
+    chunk_manager = ESTextChunkManager(
+        id=6, field="content", index=cfg.get_pre_process_index(1), db=db
+    )
     max_tokens = model.context_size - cfg.MEMRORY_TOKENS_LIMIT
 
     print(f"total hits: {chunk_manager.total_hits}")
