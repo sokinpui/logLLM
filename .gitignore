@@ -45,4 +45,6 @@ models/
 *.swp
 *~
 
+*.zip
+
 # Add any other custom ignores here
