@@ -139,3 +139,19 @@ def get_normalized_parsed_log_storage_index(group: str) -> str:
     """
     clean_group = group.replace(" ", "_").replace("/", "_").replace(".", "_").lower()
     return f"normalized_parsed_log_{clean_group}"
+
+
+# =========== LLM error summary ===============
+# Index for storing LLM-generated error summaries
+INDEX_ERROR_SUMMARIES = "log_error_summaries"
+
+# Default clustering parameters (can be overridden by CLI)
+DEFAULT_CLUSTERING_EMBEDDING_MODEL = (
+    "models/text-embedding-004"  # Or your preferred embedding model
+)
+DEFAULT_DBSCAN_EPS = 0.5  # Epsilon for DBSCAN (adjust based on embedding space)
+DEFAULT_DBSCAN_MIN_SAMPLES = 3  # Min samples for DBSCAN
+
+# Default sampling parameters
+DEFAULT_MAX_SAMPLES_PER_CLUSTER_FOR_SUMMARY = 5
+DEFAULT_MAX_SAMPLES_UNCLUSTERED_FOR_SUMMARY = 20
