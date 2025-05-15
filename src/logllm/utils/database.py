@@ -1,20 +1,20 @@
 from abc import ABC, abstractmethod
-import requests
-from elasticsearch import Elasticsearch, helpers
-from langchain_elasticsearch import ElasticsearchStore
-from typing import (
-    Callable,
-    Iterator,
-    Dict,
+from typing import (  # Add necessary types
     Any,
+    Callable,
+    Dict,
+    Iterator,
     List,
     Optional,
     Tuple,
-)  # Add necessary types
+)
 
+import requests
+from elasticsearch import Elasticsearch, helpers
+from langchain_elasticsearch import ElasticsearchStore
 
-from .logger import Logger
 from ..config import config as cfg
+from .logger import Logger
 
 
 class Database(ABC):
@@ -82,7 +82,8 @@ class ElasticsearchDatabase(Database):
         Return all search results using the Scroll API.
 
         Args:
-            query (dict): The Elasticsearch query body.
+            query (dict): The Elasticsearch query body. This body SHOULD contain
+                          the desired 'size' for the initial batch.
             index (str): The index to search in.
 
         Returns:
@@ -91,52 +92,62 @@ class ElasticsearchDatabase(Database):
         if self.instance is None:
             self._logger.error("Elasticsearch instance not initialized")
             print("please check if Container is running")
-            exit(1)
-
-        # Initial search with scroll
-        scroll_size = 10000  # Number of documents per batch
-        query_with_size = query.copy()  # Avoid modifying the original query
-        if "size" not in query_with_size:
-            query_with_size["size"] = scroll_size  # Set batch size
+            return []  # Return empty list on error
 
         all_hits = []
+        scroll_id = None  # Initialize scroll_id
+
         try:
             # Initial search with scroll
+            # The 'query' dict should already contain 'size' if specified by the caller.
+            # If not, Elasticsearch defaults (usually 10).
+            # We ensure scroll parameter is present.
+            self._logger.debug(
+                f"Initial scroll search query for index '{index}': {query}"
+            )
             resp = self.instance.search(
                 index=index,
-                body=query,
-                scroll="5m",  # Keep scroll context alive longer
-                size=1000,  # Fetch in chunks
+                body=query,  # Pass the query body as is
+                scroll="5m",  # Keep scroll context alive
+                # DO NOT specify 'size' here if it's in the 'query' body
             )
             scroll_id = resp.get("_scroll_id")
             hits = resp["hits"]["hits"]
             all_hits.extend(hits)
+            self._logger.debug(
+                f"Initial scroll fetch: {len(hits)} hits. Scroll ID: {scroll_id}"
+            )
 
             # Continue scrolling until no more results or scroll_id is missing
             while scroll_id and len(hits) > 0:
+                self._logger.debug(f"Continuing scroll with ID: {scroll_id}")
                 resp = self.instance.scroll(scroll_id=scroll_id, scroll="5m")
-                scroll_id = resp.get("_scroll_id")
+                scroll_id = resp.get(
+                    "_scroll_id"
+                )  # Update scroll_id for the next iteration
                 hits = resp["hits"]["hits"]
                 all_hits.extend(hits)
-
-            # Clean up scroll context (only if scroll_id was obtained)
-            if scroll_id:
-                try:
-                    self.instance.clear_scroll(scroll_id=scroll_id)
-                except Exception as clear_err:
-                    # Log clearing error but don't necessarily fail the whole operation
-                    self._logger.warning(
-                        f"Failed to clear scroll context {scroll_id}: {clear_err}"
-                    )
+                self._logger.debug(f"Next scroll batch: {len(hits)} hits.")
 
         except Exception as e:
             self._logger.error(
                 f"Error during scroll search on index '{index}': {e}", exc_info=True
             )
-            # Optionally re-raise or return partial results depending on desired behavior
-            # Here, we return what we have gathered so far
-            return all_hits
+            # Optionally re-raise or return partial results
+            # Current behavior returns what was gathered so far
+        finally:  # Ensure clear_scroll is attempted
+            if scroll_id:
+                try:
+                    self.instance.clear_scroll(scroll_id=scroll_id)
+                    self._logger.debug(f"Scroll context {scroll_id} cleared.")
+                except Exception as clear_err:
+                    self._logger.warning(
+                        f"Failed to clear scroll context {scroll_id}: {clear_err}"
+                    )
 
+        self._logger.info(
+            f"Scroll search completed for index '{index}'. Total hits retrieved: {len(all_hits)}"
+        )
         return all_hits
 
     def update(
