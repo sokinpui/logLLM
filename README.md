@@ -78,8 +78,8 @@ Refer to the [Global Options documentation](./doc/cli/global_options.md) for opt
 ```
 logLLM/
 ├── doc/
-│   ├── cli/                 # Detailed CLI command documentation
-│   │   ├── README.md        # Navigation for CLI docs
+│   ├── cli/
+│   │   ├── README.md
 │   │   ├── global_options.md
 │   │   ├── db.md
 │   │   ├── collect.md
@@ -92,23 +92,23 @@ logLLM/
 │   ├── overview.md
 │   ├── prompts_manager.md
 │   └── utils.md
-├── logs/                # Example log files
-├── models/              # Local LLM model files
-├── prompts/             # Default prompt store
+├── logs/
+├── models/
+├── prompts/
 │   └── .git/
 ├── src/
 │   └── logllm/
 │       ├── __init__.py
 │       ├── __main__.py
 │       ├── agents/
-│       ├── cli/             # CLI command handlers
+│       ├── cli/
 │       ├── config/
-│       ├── processors/      # Data processing modules
+│       ├── processors/
 │       └── utils/
 ├── .gitignore
 ├── pyproject.toml
 ├── requirement.txt
-├── README.md            # This file
+├── README.md
 └── movelook.log
 ```
 
