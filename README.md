@@ -3,6 +3,7 @@
 **logLLM** is a command-line tool and library designed to process, parse, and analyze log data using Large Language Models (LLMs) and traditional parsing techniques. It provides a modular framework integrating various utilities and agents, managed through a central Command Line Interface (CLI).
 
 ## Table of Contents
+
 - [Overview](#overview)
 - [Installation](#installation)
 - [Usage (CLI)](#usage-cli)
@@ -17,6 +18,7 @@
 - [License](#license)
 
 ## Overview
+
 This project leverages a CLI built with `argparse` to manage different functionalities:
 
 - **Database Containers**: Start, stop, and manage Elasticsearch & Kibana Docker containers (`db` command).
@@ -29,171 +31,100 @@ This project leverages a CLI built with `argparse` to manage different functiona
 - **Configurations**: Centralized settings (`config.py`) for logging, Docker, databases, index naming, and LLM models (see [configurations.md](./doc/configurable.md)).
 
 ## Installation
+
 1.  **Clone the Repository**:
+
     ```bash
     git clone https://github.com/yourusername/logLLM.git # Replace with your repo URL
     cd logLLM
     ```
 
 2.  **Set Up a Virtual Environment** (optional but recommended):
+
     ```bash
     python -m venv venv
     source venv/bin/activate  # On Windows: venv\Scripts\activate
     ```
 
 3.  **Install Dependencies**:
+
     ```bash
     pip install -r requirement.txt
     ```
-    *Note*: The prompt management (`pm`) command requires `git` installed and accessible in the system PATH for version control features. Docker (or Colima on macOS) is required for the `db` command.
+
+    _Note_: The prompt management (`pm`) command requires `git` installed and accessible in the system PATH for version control features. Docker (or Colima on macOS) is required for the `db` command.
 
 4.  **Set Environment Variables**:
-    *   Ensure `GENAI_API_KEY` is set in your environment if using the Gemini model.
-    *   Check `src/logllm/config/config.py` for other potential configuration needs.
+    - Ensure `GENAI_API_KEY` is set in your environment if using the Gemini model.
+    - Check `src/logllm/config/config.py` for other potential configuration needs.
 
-## Usage (CLI)
 The main entry point is `src/logllm/__main__.py`. Run commands using `python -m src.logllm <command> [options]`.
 
-**Global Options:**
-*   `--verbose`: Enable detailed logging output globally.
-*   `--test`: Use `prompts/test.json` for prompt-related commands (`pm`, `parse`, `es-parse`). Overridden by `--json`.
-*   `-j, --json PATH`: Specify a custom JSON file path for prompts. Overrides `--test`.
+**For a comprehensive guide to all CLI commands, actions, options, and examples, please refer to the dedicated [CLI Documentation Hub](./doc/cli/README.md).**
 
-### Database Management (`db`)
-Manage Elasticsearch and Kibana containers.
-```bash
-# Start containers (specify memory for Colima VM if needed)
-python -m src.logllm db start [-m <GB>]
+**Quick Examples:**
 
-# Check container status
-python -m src.logllm db status
+- Start database containers: `python -m src.logllm db start`
+- Collect logs: `python -m src.logllm collect -d ./logs`
+- Parse local file: `python -m src.logllm parse -f ./logs/some.log`
+- Parse logs in Elasticsearch for all groups: `python -m src.logllm es-parse run -t 4`
+- Normalize timestamps for a group: `python -m src.logllm normalize-ts run -g apache`
+- Scan for prompts: `python -m src.logllm pm scan -d src/logllm/agents -r`
 
-# Stop containers
-python -m src.logllm db stop [--remove] [--stop-colima]
-
-# Restart containers
-python -m src.logllm db restart [-m <GB>]
-```
-See `python -m src.logllm db --help` for more details.
-
-### Log Collection (`collect`)
-Collect logs from a directory into Elasticsearch. Requires a running DB.
-```bash
-# Collect logs from ./logs directory
-python -m src.logllm collect -d ./logs
-```
-See `python -m src.logllm collect --help`.
-
-### File-based Parsing (`parse`)
-Parse local log files into CSV using Grok. Requires logs to be collected first if using directory mode (`-d`).
-```bash
-# Parse logs for groups defined in DB, based on original log directory
-# Uses parallel workers by default if -t > 1
-python -m src.logllm parse -d ./logs [-t <threads>] [--show-progress]
-
-# Parse a single file (LLM generates pattern if --grok-pattern omitted)
-python -m src.logllm parse -f ./logs/ssh/SSH.log [--grok-pattern "<GROK_STRING>"]
-```
-See `python -m src.logllm parse --help`.
-
-### Elasticsearch-based Parsing (`es-parse`)
-Parse raw logs stored in Elasticsearch, indexing results back into ES. Requires a running DB and collected logs. Provides subcommands: `run`, `list`, `use`.
-
-```bash
-# Run parsing for all log groups found in Elasticsearch (parallel workers)
-python -m src.logllm es-parse run [-t <threads>] [-b <batch_size>] [-s <gen_sample>] \
-                                 [--validation-sample-size <val_sample>] \
-                                 [--validation-threshold <rate>] [--max-retries <num>] \
-                                 [--copy-fields <field1> <field2>] [--keep-unparsed]
-
-# Run parsing only for a specific group (ignores -t)
-python -m src.logllm es-parse run -g <group_name> [options...]
-
-# Run parsing for a specific group using a user-provided Grok pattern
-python -m src.logllm es-parse run -g <group_name> -p "<GROK_STRING>" [options...]
-
-# List the latest parsing results for each group
-python -m src.logllm es-parse list
-
-# List all historical parsing results for all groups
-python -m src.logllm es-parse list -a
-
-# List only results for a specific group (latest)
-python -m src.logllm es-parse list -g <group_name>
-
-# List only the names of groups found in history
-python -m src.logllm es-parse list --group-name
-
-# List results in JSON format
-python -m src.logllm es-parse list --json
-
-# Re-run parsing for a group using the pattern from a specific past run
-# Use the timestamp displayed by 'es-parse list'
-python -m src.logllm es-parse use -g <group_name> -t "YYYY-MM-DD HH:MM:SS" [options...]
-```
-See `python -m src.logllm es-parse --help` for all options and subcommand details.
-
-### Prompt Management (`pm`)
-Manage LLM prompts stored in `prompts.json` (or custom path via global `-j/--json` or `--test`).
-```bash
-# Scan code directory to update prompt structure (recursive)
-python -m src.logllm pm scan -d src/logllm/agents -r [-m "Commit message"]
-
-# List all keys
-python -m src.logllm pm list
-
-# List only keys with actual prompts
-python -m src.logllm pm list --prompt
-
-# Add or update a prompt for a key (use -f for file input)
-python -m src.logllm pm add -k src.logllm.agents.parser_agent.SimpleGrokLogParserAgent._generate_grok_pattern -v "New prompt {sample_logs}"
-
-# Remove a key
-python -m src.logllm pm rm -k src.logllm.agents.parser_agent.SimpleGrokLogParserAgent._generate_grok_pattern
-
-# View version history for a key
-python -m src.logllm pm version -k <key_path> [--verbose-hist -1] [--tail 5]
-
-# Revert a key (or entire file if -k omitted) to a specific commit
-python -m src.logllm pm revert -c <commit_hash> [-k <key_path>]
-
-# Show differences between two commits for a key (or entire file)
-python -m src.logllm pm diff -c1 <commit1> -c2 <commit2> [-k <key_path>]
-```
-See `python -m src.logllm pm --help` and [prompt_manager.md](./doc/prompts_manager.md) for full details.
+Refer to the [Global Options documentation](./doc/cli/global_options.md) for options like `--verbose`, `--test`, and `--json` that apply across commands.
 
 ## Project Structure
+
 ```
 logLLM/
-├── doc/                 # Documentation files
-├── logs/                # Example log files (Input for `collect`, `parse`)
-├── models/              # Local LLM model files (e.g., GGUF for llama-cpp)
-├── prompts/             # Default prompt store (prompts.json, test.json - Git-managed)
-│   └── .git/            # Separate Git repo for prompt versioning
+├── doc/
+│   ├── cli/                 # Detailed CLI command documentation
+│   │   ├── README.md        # Navigation for CLI docs
+│   │   ├── global_options.md
+│   │   ├── db.md
+│   │   ├── collect.md
+│   │   ├── parse.md
+│   │   ├── es-parse.md
+│   │   ├── normalize-ts.md
+│   │   └── pm.md
+│   ├── agents.md
+│   ├── configurations.md
+│   ├── overview.md
+│   ├── prompts_manager.md
+│   └── utils.md
+├── logs/                # Example log files
+├── models/              # Local LLM model files
+├── prompts/             # Default prompt store
+│   └── .git/
 ├── src/
 │   └── logllm/
 │       ├── __init__.py
-│       ├── __main__.py      # Main CLI entry point
-│       ├── agents/          # Agent implementations (parsing, analysis)
-│       ├── cli/             # CLI command handlers (db, collect, parse, es-parse, pm)
-│       ├── config/          # Configuration (config.py)
-│       └── utils/           # Utility modules (database, logger, prompts_manager, etc.)
+│       ├── __main__.py
+│       ├── agents/
+│       ├── cli/             # CLI command handlers
+│       ├── config/
+│       ├── processors/      # Data processing modules
+│       └── utils/
 ├── .gitignore
-├── pyproject.toml       # Project metadata and build config
-├── requirement.txt      # Python dependencies
+├── pyproject.toml
+├── requirement.txt
 ├── README.md            # This file
-└── movelook.log         # Default log output file
+└── movelook.log
 ```
 
 ## Documentation
+
+- **[CLI Documentation Hub](./doc/cli/README.md)**: Comprehensive guide for all CLI commands.
 - **[agents.md](./doc/agents.md)**: Agent details.
 - **[configurations.md](./doc/configurable.md)**: Config settings (`config.py`).
 - **[utils.md](./doc/utils.md)**: Utility module documentation.
-- **[prompt_manager.md](./doc/prompts_manager.md)**: Detailed guide for the `pm` command and `PromptsManager` class.
-- **[overview.md](./doc/overview.md)**: High-level overview of agent interaction (Note: Orchestration is now mainly via CLI dispatch).
+- **[prompt_manager.md](./doc/prompts_manager.md)**: Detailed guide for the `pm` command and `PromptsManager` class (also covered in CLI docs).
+- **[overview.md](./doc/overview.md)**: High-level overview of CLI orchestration.
 
 ## Contributing
+
 Contributions are welcome! Please:
+
 1. Fork the repository.
 2. Create a feature branch (`git checkout -b feature/xyz`).
 3. Commit changes (`git commit -m "Add xyz feature"`).
@@ -201,6 +132,5 @@ Contributions are welcome! Please:
 5. Open a pull request.
 
 ## License
+
 [MIT License](./LICENSE) - feel free to use, modify, and distribute this project.
-
-
