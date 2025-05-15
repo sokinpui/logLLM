@@ -26,6 +26,10 @@ def handle_analyze_errors_run(args):
         f"Executing analyze-errors run: group='{args.group}', time_window='{args.time_window}', levels='{args.log_levels}', max_initial='{args.max_initial_errors}'"
     )  # Added max_initial_errors to log
     print(f"Starting error analysis for group '{args.group}'...")
+    working_index_name = cfg.get_error_analysis_working_index(args.group)
+    print(
+        f"Fetched errors will be temporarily stored in index: '{working_index_name}' (deleted on next run for this group)."
+    )
 
     try:
         db = ElasticsearchDatabase()

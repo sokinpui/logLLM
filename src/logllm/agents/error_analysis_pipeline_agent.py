@@ -1,6 +1,7 @@
 # src/logllm/agents/error_analysis_pipeline_agent.py (NEW FILE)
 from typing import Any, Dict, List, Optional
 
+from elasticsearch.helpers import bulk
 from langgraph.graph import END, StateGraph
 from langgraph.graph.graph import CompiledGraph
 
@@ -44,44 +45,117 @@ class ErrorAnalysisPipelineAgent:
     def _fetch_initial_errors_node(
         self, state: ErrorAnalysisPipelineState
     ) -> Dict[str, Any]:
-        self.logger.info(
-            f"Fetching initial error logs for group '{state['group_name']}' using query."
+        group_name = state["group_name"]
+        es_query_for_errors = state["es_query_for_errors"]
+        status_msgs = state.get("status_messages", [])
+
+        self.logger.info(f"[{group_name}] Fetching initial error logs using query.")
+
+        source_index_for_errors = cfg.get_normalized_parsed_log_storage_index(
+            group_name
         )
+        working_index_name = cfg.get_error_analysis_working_index(group_name)
+
+        self.logger.info(
+            f"[{group_name}] Original source: '{source_index_for_errors}', Temp working index: '{working_index_name}'"
+        )
+        status_msgs.append(f"Using temp working index: {working_index_name}")
+
+        error_docs: List[LogDocument] = []
+
         try:
-            # Construct the source index name correctly
-            group_name = state["group_name"]
-            # Decide whether to use normalized_parsed_log or parsed_log based on your workflow preference
-            # For timestamp-sensitive analysis, normalized_parsed_log_* is better.
-            source_index_for_errors = cfg.get_normalized_parsed_log_storage_index(
-                group_name
-            )
-            # Fallback if normalized doesn't exist, or decide on one source.
-            # if not self.db.instance.indices.exists(index=source_index_for_errors):
-            #     source_index_for_errors = cfg.get_parsed_log_storage_index(group_name)
+            # 1. Delete the working index if it exists
+            if self.db.instance.indices.exists(index=working_index_name):
+                self.logger.info(
+                    f"[{group_name}] Deleting existing working index: {working_index_name}"
+                )
+                self.db.instance.indices.delete(
+                    index=working_index_name, ignore_unavailable=True
+                )
+                status_msgs.append(f"Deleted old working index {working_index_name}.")
 
-            self.logger.info(f"Querying error source index: {source_index_for_errors}")
+            # 2. Create the working index (dynamic mapping should be fine for temp use)
+            # self.db.instance.indices.create(index=working_index_name, ignore=400) # 400 if already exists (race condition)
+            # logger.info(f"[{group_name}] Created new working index: {working_index_name}")
+            # No explicit create needed if we're just going to bulk index; ES will create it.
 
-            error_docs_raw = self.db.scroll_search(
-                index=source_index_for_errors, query=state["es_query_for_errors"]
+            # 3. Fetch error logs from the original source index
+            self.logger.info(
+                f"[{group_name}] Querying original source '{source_index_for_errors}' for errors."
             )
-            error_docs: List[LogDocument] = [
-                {"_id": hit["_id"], "_source": hit["_source"]}
-                for hit in error_docs_raw
-                if "_source" in hit
-            ]
-            self.logger.info(f"Fetched {len(error_docs)} initial error documents.")
-            return {
-                "error_log_docs": error_docs,
-                "status_messages": state.get("status_messages", [])
-                + [f"Fetched {len(error_docs)} error logs."],
-            }
+
+            # Ensure the query body for fetching includes _source
+            if "_source" not in es_query_for_errors:
+                es_query_for_errors["_source"] = (
+                    True  # Fetch all source fields by default if not specified
+                )
+
+            all_hits_from_source = self.db.scroll_search(
+                index=source_index_for_errors,
+                query=es_query_for_errors,  # This query already contains size and _source
+            )
+            self.logger.info(
+                f"[{group_name}] Fetched {len(all_hits_from_source)} raw documents from '{source_index_for_errors}'."
+            )
+
+            if not all_hits_from_source:
+                status_msgs.append(
+                    f"Fetched 0 error logs from {source_index_for_errors}."
+                )
+                return {"error_log_docs": [], "status_messages": status_msgs}
+
+            # 4. Bulk index these fetched logs into the working index
+            actions_to_bulk = []
+            for hit in all_hits_from_source:
+                if (
+                    "_source" in hit and "_id" in hit
+                ):  # Ensure document has source and id
+                    actions_to_bulk.append(
+                        {
+                            "_index": working_index_name,
+                            "_id": hit["_id"],
+                            "_source": hit["_source"],
+                        }
+                    )
+                    # Also prepare the in-memory list for subsequent pipeline steps
+                    error_docs.append({"_id": hit["_id"], "_source": hit["_source"]})
+
+            if actions_to_bulk:
+                self.logger.info(
+                    f"[{group_name}] Bulk indexing {len(actions_to_bulk)} documents into '{working_index_name}'."
+                )
+                success_count, errors = self.db.bulk_operation(
+                    actions=actions_to_bulk
+                )  # Use the robust bulk_operation
+                if errors:
+                    self.logger.error(
+                        f"[{group_name}] Errors during bulk indexing to working index: {errors[:3]}"
+                    )
+                    status_msgs.append(
+                        f"ERROR: {len(errors)} errors bulk indexing to {working_index_name}."
+                    )
+                else:
+                    self.logger.info(
+                        f"[{group_name}] Successfully indexed {success_count} documents to '{working_index_name}'."
+                    )
+                    status_msgs.append(
+                        f"Stored {success_count} fetched errors into {working_index_name}."
+                    )
+            else:
+                self.logger.info(
+                    f"[{group_name}] No valid documents to bulk index into working index."
+                )
+
+            status_msgs.append(f"Fetched {len(error_docs)} error logs for processing.")
+            return {"error_log_docs": error_docs, "status_messages": status_msgs}
+
         except Exception as e:
-            self.logger.error(f"Failed to fetch initial errors: {e}", exc_info=True)
-            return {
-                "error_log_docs": [],
-                "status_messages": state.get("status_messages", [])
-                + [f"ERROR: Failed to fetch initial errors: {e}"],
-            }
+            self.logger.error(
+                f"[{group_name}] Failed during fetch/store to working index: {e}",
+                exc_info=True,
+            )
+            status_msgs.append(f"ERROR: Failed fetch/store to working index: {e}")
+            return {"error_log_docs": [], "status_messages": status_msgs}
 
     def _cluster_errors_node(self, state: ErrorAnalysisPipelineState) -> Dict[str, Any]:
         self.logger.info("Clustering error logs...")

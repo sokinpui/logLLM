@@ -156,3 +156,13 @@ DEFAULT_DBSCAN_MIN_SAMPLES = 3  # Min samples for DBSCAN
 # Default sampling parameters
 DEFAULT_MAX_SAMPLES_PER_CLUSTER_FOR_SUMMARY = 5
 DEFAULT_MAX_SAMPLES_UNCLUSTERED_FOR_SUMMARY = 20
+
+
+def get_error_analysis_working_index(group_name: str) -> str:
+    """
+    Generates the name for the temporary working index used during error analysis for a group.
+    """
+    clean_group = (
+        group_name.replace(" ", "_").replace("/", "_").replace(".", "_").lower()
+    )
+    return f"temp_error_analysis_{clean_group}"
