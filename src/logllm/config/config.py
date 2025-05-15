@@ -129,3 +129,13 @@ def get_unparsed_log_storage_index(group: str) -> str:
 # Maximum Memory context sie for analyze agent to store summary
 MEMRORY_TOKENS_LIMIT = 20000
 # ==========================
+
+
+# =========== timestamp normalizer ===============
+def get_normalized_parsed_log_storage_index(group: str) -> str:
+    """
+    Generates an Elasticsearch index name for storing PARSED logs
+    that have had their timestamps NORMALIZED.
+    """
+    clean_group = group.replace(" ", "_").replace("/", "_").replace(".", "_").lower()
+    return f"normalized_parsed_log_{clean_group}"

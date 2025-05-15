@@ -3,11 +3,9 @@ import argparse
 import sys
 
 try:
-    from .cli import container
-    from .cli import collect
-    from .cli import parse  # Keep original file parser
     from .cli import es_parse  # Import the new DB parser command file
-    from .cli import pm
+    from .cli import parse  # Keep original file parser
+    from .cli import collect, container, normalize_ts, pm
 except ImportError as e:
     print(f"Import Error: {e}")
     sys.exit(1)
@@ -43,6 +41,7 @@ def main():
     parse.register_parse_parser(subparsers)  # File parser
     es_parse.register_es_parse_parser(subparsers)  # ES parser << NEW
     pm.register_pm_parser(subparsers)
+    normalize_ts.register_normalize_ts_parser(subparsers)
 
     try:
         args = parser.parse_args()
