@@ -384,8 +384,8 @@ def register_normalize_ts_parser(subparsers):
         "-b",
         "--batch-size",
         type=int,
-        default=100,
-        help="Number of documents to process and index in each bulk ES request (default: 100).",
+        default=1000,
+        help="Number of documents to process and index in each bulk ES request (default: 1000).",
     )
     default_threads = 1
     try:
