@@ -1,19 +1,23 @@
 # Detailed Documentation for Agent-Related Files
 
 This document describes the agents and related utility classes used within the `logLLM` project, primarily located under `src/logllm/agents/`.
+For agents specifically involved in the error log analysis and summarization pipeline, please see [doc/error_analysis_agents.md](./error_analysis_agents.md).
 
 ---
 
 ## File: `src/logllm/agents/agent_abc.py`
 
 ### Overview
+
 This file defines the abstract base class `Agent` that serves as an interface for other agent implementations, particularly those using graph-based workflows like LangGraph. It also includes a utility function for state management within LangGraph.
 
 ### Class: `Agent(ABC)`
+
 - **Purpose**: Abstract base class defining the common interface for all agents in the system. It enforces the implementation of methods for building a workflow graph (if applicable) and for synchronous/asynchronous execution.
 - **Key Attributes**:
   - `graph` (CompiledStateGraph): Expected attribute for agents implementing a LangGraph workflow, holding the compiled graph object.
 - **Key Methods**:
+
   - **`_build_graph(self, typed_state) -> CompiledStateGraph`**
     - **Type**: Abstract Method.
     - **Description**: Intended for subclasses that utilize `langgraph.StateGraph`. This method should be implemented to construct the agent's specific workflow graph, defining nodes and edges based on the provided state type.
@@ -23,13 +27,13 @@ This file defines the abstract base class `Agent` that serves as an interface fo
     - **Usage**: Subclasses like `SingleGroupParserAgent` implement this to define their multi-step logic flow.
   - **`run(self)`**
     - **Type**: Abstract Method.
-    - **Description**: Defines the primary synchronous execution logic for an agent. Subclasses *must* implement this method to be runnable.
+    - **Description**: Defines the primary synchronous execution logic for an agent. Subclasses _must_ implement this method to be runnable.
     - **Parameters**: Varies by implementation (e.g., might take initial state or input data).
     - **Returns**: Varies by implementation (e.g., final state, results dictionary).
     - **Usage**: Called to start the agent's task, e.g., `result = agent.run(input_data)`.
   - **`arun(self)`**
     - **Type**: Abstract Method.
-    - **Description**: Defines the primary asynchronous execution logic for an agent. Subclasses *must* implement this method if asynchronous execution is required.
+    - **Description**: Defines the primary asynchronous execution logic for an agent. Subclasses _must_ implement this method if asynchronous execution is required.
     - **Parameters**: Varies by implementation.
     - **Returns**: Varies by implementation (awaitable).
     - **Usage**: Called to start the agent's task asynchronously, e.g., `result = await agent.arun(input_data)`.
@@ -47,9 +51,11 @@ This file defines the abstract base class `Agent` that serves as an interface fo
 ## File: `src/logllm/agents/parser_agent.py`
 
 ### Overview
+
 This file contains agents focused on parsing log files directly from the local filesystem. It primarily uses the Grok parsing technique, potentially leveraging LLMs for pattern generation, and outputs results to CSV files.
 
 ### Class: `SimpleGrokLogParserState(TypedDict)`
+
 - **Purpose**: Defines the data structure (state) passed between steps and returned by the `SimpleGrokLogParserAgent`.
 - **Fields**:
   - `log_file_path` (str): The absolute path to the log file being processed.
@@ -57,15 +63,17 @@ This file contains agents focused on parsing log files directly from the local f
   - `output_csv_path` (str): The path where the resulting CSV file is saved. Empty if parsing fails or produces no output.
   - `sample_logs` (str): A string containing sample log lines extracted from the file, used as context if the LLM needs to generate a pattern. Populated by the agent.
   - `parsed_lines` (int): A counter for the number of log lines successfully matched and parsed by the Grok pattern.
-  - `skipped_lines` (int): A counter for the number of log lines that did *not* match the Grok pattern.
+  - `skipped_lines` (int): A counter for the number of log lines that did _not_ match the Grok pattern.
 
 ### Class: `GrokPatternSchema(BaseModel)`
+
 - **Purpose**: A Pydantic data model defining the expected structure for the LLM's response when asked to generate a Grok pattern. This ensures the LLM returns only the pattern string.
 - **Fields**:
   - `grok_pattern` (str): The generated Grok pattern string.
 
 ### Class: `SimpleGrokLogParserAgent`
-- **Purpose**: An agent designed to parse a *single* log file using a Grok pattern. It can either use a user-provided pattern or generate one using an LLM if none is supplied. The output is a CSV file containing the parsed fields.
+
+- **Purpose**: An agent designed to parse a _single_ log file using a Grok pattern. It can either use a user-provided pattern or generate one using an LLM if none is supplied. The output is a CSV file containing the parsed fields.
 - **Key Methods**:
   - **`__init__(self, model: LLMModel)`**
     - **Description**: Initializes the agent. Requires an instance of an `LLMModel` (like `GeminiModel`) for pattern generation and initializes a `PromptsManager` to fetch the necessary prompts.
@@ -93,8 +101,10 @@ This file contains agents focused on parsing log files directly from the local f
     - **Usage**: Called by `run` after a valid Grok pattern is available.
 
 ### Class: `GroupLogParserAgent`
+
 - **Purpose**: Orchestrates the parsing of multiple log files, grouped by their parent directory structure (as defined in the Elasticsearch `group_infos` index). It can run sequentially or utilize a pool of worker processes for parallel parsing, delegating the actual parsing of each file to a `SimpleGrokLogParserAgent` instance (via `_parse_file_worker`).
 - **Key Methods**:
+
   - **`__init__(self, model: LLMModel)`**
     - **Description**: Initializes the agent. Requires an `LLMModel` instance (used in the main thread for potential pattern pre-determination or sequential execution) and an `ElasticsearchDatabase` instance to fetch group information.
     - **Parameters**:
@@ -126,7 +136,7 @@ This file contains agents focused on parsing log files directly from the local f
 
 - **Worker Function**: **`_parse_file_worker(file_path: str, group_grok_pattern: Optional[str], show_progress: bool) -> Tuple[str, Optional[str]]`**
   - **Purpose**: This function is designed to be executed by worker processes created by `ProcessPoolExecutor` in `GroupLogParserAgent.parse_all_logs`. It handles the parsing of a single log file.
-  - **Description**: Initializes its own `LLMModel` and `SimpleGrokLogParserAgent`. It attempts to parse the given `file_path` using the `group_grok_pattern` (if provided). If parsing fails *and* a group pattern was provided, it attempts a fallback by calling the agent again without a pattern, forcing LLM generation specific to that file.
+  - **Description**: Initializes its own `LLMModel` and `SimpleGrokLogParserAgent`. It attempts to parse the given `file_path` using the `group_grok_pattern` (if provided). If parsing fails _and_ a group pattern was provided, it attempts a fallback by calling the agent again without a pattern, forcing LLM generation specific to that file.
   - **Parameters**:
     - `file_path` (str): The absolute path of the log file to be parsed by this worker.
     - `group_grok_pattern` (Optional[str]): The Grok pattern pre-determined for the group this file belongs to (can be `None`).
@@ -139,9 +149,11 @@ This file contains agents focused on parsing log files directly from the local f
 ## File: `src/logllm/agents/es_parser_agent.py`
 
 ### Overview
+
 This file implements a more advanced parsing workflow specifically designed to operate on log data already ingested into Elasticsearch. It uses LangGraph to manage a multi-step process including LLM-based Grok pattern generation, pattern validation, retries on failure, fallback mechanisms, and bulk indexing of results (parsed or original) into separate Elasticsearch indices. It also logs the results of each run to a dedicated history index.
 
 ### Class: `ScrollGrokParserState(TypedDict)`
+
 - **Purpose**: Defines the configuration and result structure for the `ScrollGrokParserAgent`, which performs the actual data processing and indexing within Elasticsearch.
 - **Fields**:
   - `source_index` (str): The ES index containing the raw log documents to be parsed.
@@ -153,7 +165,7 @@ This file implements a more advanced parsing workflow specifically designed to o
   - `fields_to_copy` (Optional[List[str]]): An optional list of field names to copy directly from the source document to the target/failed document if they don't already exist after parsing.
   - `batch_size` (int): The number of documents to process and index in each bulk request.
   - `is_fallback_run` (bool): A flag indicating whether this agent run is operating in "fallback" mode (using a generic pattern and writing all source docs to `failed_index`) or "parse" mode (using the provided `grok_pattern` and writing successes to `target_index`, failures to `failed_index`).
-  - *Result Fields (Populated by the agent's `run` method)*:
+  - _Result Fields (Populated by the agent's `run` method)_:
     - `processed_count` (int): Total number of documents scrolled from the source index.
     - `successfully_indexed_count` (int): Number of documents successfully parsed and indexed into the `target_index`.
     - `failed_indexed_count` (int): Number of documents that failed parsing or were part of a fallback run, successfully indexed into the `failed_index`.
@@ -162,9 +174,10 @@ This file implements a more advanced parsing workflow specifically designed to o
     - `status` (str): The final status of the agent run ('completed', 'failed').
 
 ### Class: `SingleGroupParseGraphState(TypedDict)`
+
 - **Purpose**: Defines the comprehensive state managed by the LangGraph workflow within the `SingleGroupParserAgent`. It holds configuration parameters passed down from the orchestrator and tracks dynamic state across the different nodes of the graph.
 - **Fields**:
-  - *Configuration*:
+  - _Configuration_:
     - `group_name` (str): The name of the log group being processed.
     - `source_index` (str): ES index containing raw logs for this group.
     - `target_index` (str): ES index for successfully parsed logs for this group.
@@ -175,10 +188,10 @@ This file implements a more advanced parsing workflow specifically designed to o
     - `sample_size_validation` (int): Number of samples for validating the generated pattern.
     - `validation_threshold` (float): Success rate (0.0-1.0) required on validation samples.
     - `batch_size` (int): Batch size for bulk indexing operations.
-    - `max_regeneration_attempts` (int): Maximum *total* attempts allowed for pattern generation/validation (includes initial attempt).
+    - `max_regeneration_attempts` (int): Maximum _total_ attempts allowed for pattern generation/validation (includes initial attempt).
     - `keep_unparsed_index` (bool): If `True`, do not delete the `failed_index` before starting the run.
     - `provided_grok_pattern` (Optional[str]): A specific Grok pattern provided by the user via the CLI, bypassing LLM generation.
-  - *Dynamic State*:
+  - _Dynamic State_:
     - `current_attempt` (int): Tracks the current attempt number for pattern generation/validation (starts at 1).
     - `current_grok_pattern` (Optional[str]): The Grok pattern currently being used or just generated.
     - `last_failed_pattern` (Optional[str]): Stores the pattern from the previous attempt if it failed validation, used as context for retries.
@@ -190,6 +203,7 @@ This file implements a more advanced parsing workflow specifically designed to o
     - `error_messages` (List[str]): A list accumulating error or warning messages encountered during the graph execution.
 
 ### Class: `AllGroupsParserState(TypedDict)`
+
 - **Purpose**: Defines the state managed by the `AllGroupsParserAgent`, which orchestrates parsing across multiple log groups.
 - **Fields**:
   - `group_info_index` (str): The name of the ES index containing the definitions of log groups and their associated file lists (e.g., `cfg.INDEX_GROUP_INFOS`).
@@ -199,6 +213,7 @@ This file implements a more advanced parsing workflow specifically designed to o
   - `status` (str): The overall status of the multi-group parsing run ('pending', 'running', 'completed', 'failed').
 
 ### Class: `ScrollGrokParserAgent`
+
 - **Purpose**: A lower-level agent responsible for the core task of iterating through documents in a source Elasticsearch index, applying a given Grok pattern (or handling fallback), and indexing the results into appropriate target or failed indices using efficient bulk operations.
 - **Key Methods**:
   - **`__init__(self, db: ElasticsearchDatabase)`**
@@ -222,7 +237,8 @@ This file implements a more advanced parsing workflow specifically designed to o
     - **Description**: Takes the documents accumulated in the internal failed/fallback batch, formats them as Elasticsearch "index" actions (preserving the original document structure under `original_source` and adding a `failure_reason`), and performs a bulk operation to index them into the `failed_index`. Updates `_failed_indexed_count` and `_index_error_count`. Clears the internal failed batch.
 
 ### Class: `SingleGroupParserAgent(Agent)`
-- **Purpose**: An agent implementing the `Agent` interface using `langgraph`. It orchestrates the entire parsing process for a *single* log group within Elasticsearch. This involves potentially generating a Grok pattern via LLM, validating the pattern against sample data, handling retries if validation fails, invoking the `ScrollGrokParserAgent` to perform the actual parsing and indexing (either with the validated pattern or a fallback), and storing the results of the run in a history index (`cfg.INDEX_GROK_RESULTS_HISTORY`).
+
+- **Purpose**: An agent implementing the `Agent` interface using `langgraph`. It orchestrates the entire parsing process for a _single_ log group within Elasticsearch. This involves potentially generating a Grok pattern via LLM, validating the pattern against sample data, handling retries if validation fails, invoking the `ScrollGrokParserAgent` to perform the actual parsing and indexing (either with the validated pattern or a fallback), and storing the results of the run in a history index (`cfg.INDEX_GROK_RESULTS_HISTORY`).
 - **Key Methods**:
   - **`__init__(self, model: LLMModel, db: ElasticsearchDatabase, prompts_manager: PromptsManager)`**
     - **Description**: Initializes the agent with its core dependencies: an `LLMModel` for pattern generation, an `ElasticsearchDatabase` for data access and sampling, and a `PromptsManager` for retrieving prompts. It also instantiates the `ScrollGrokParserAgent` sub-agent and calls `_build_graph` to compile its internal LangGraph workflow.
@@ -247,8 +263,10 @@ This file implements a more advanced parsing workflow specifically designed to o
     - **`_decide_after_validation`**: Called after `_validate_pattern_node`. Checks if `validation_passed` is True. If yes, routes to `parse_all`. If no, checks if `current_attempt` < `max_regeneration_attempts`; if yes, routes to `prepare_for_retry`; otherwise, routes to `fallback`.
 
 ### Class: `AllGroupsParserAgent`
-- **Purpose**: An orchestrator agent responsible for managing the concurrent parsing of *all* log groups found in the Elasticsearch `group_infos` index. It does not perform parsing itself but distributes the work to multiple `SingleGroupParserAgent` instances.
+
+- **Purpose**: An orchestrator agent responsible for managing the concurrent parsing of _all_ log groups found in the Elasticsearch `group_infos` index. It does not perform parsing itself but distributes the work to multiple `SingleGroupParserAgent` instances.
 - **Key Methods**:
+
   - **`__init__(self, model: LLMModel, db: ElasticsearchDatabase, prompts_manager: PromptsManager)`**
     - **Description**: Initializes the orchestrator with shared dependencies (`LLMModel`, `ElasticsearchDatabase`, `PromptsManager`) that will be used by or passed to the worker function.
   - **`run(self, initial_state: AllGroupsParserState, num_threads: int, batch_size: int, ..., keep_unparsed_index: bool, provided_grok_pattern: Optional[str]) -> AllGroupsParserState`**
@@ -266,7 +284,7 @@ This file implements a more advanced parsing workflow specifically designed to o
 
 - **Worker Function**: **`_parallel_group_worker_new(single_group_config: Dict[str, Any], prompts_json_path: str) -> Tuple[str, SingleGroupParseGraphState]`**
   - **Purpose**: This function is executed by each thread in the `ThreadPoolExecutor` managed by `AllGroupsParserAgent`. It's responsible for parsing a single log group.
-  - **Description**: It initializes its *own* instances of `ElasticsearchDatabase`, `LLMModel`, and `PromptsManager` (using the provided `prompts_json_path`) to ensure thread safety. It then instantiates a `SingleGroupParserAgent` and calls its `run` method with the `single_group_config` dictionary. It includes error handling to catch exceptions during the agent run and returns a failed state if necessary.
+  - **Description**: It initializes its _own_ instances of `ElasticsearchDatabase`, `LLMModel`, and `PromptsManager` (using the provided `prompts_json_path`) to ensure thread safety. It then instantiates a `SingleGroupParserAgent` and calls its `run` method with the `single_group_config` dictionary. It includes error handling to catch exceptions during the agent run and returns a failed state if necessary.
   - **Parameters**:
     - `single_group_config` (Dict): The complete configuration dictionary required by `SingleGroupParserAgent.run` for this specific group.
     - `prompts_json_path` (str): The path to the prompts JSON file, needed to initialize `PromptsManager` within the worker.
@@ -277,13 +295,14 @@ This file implements a more advanced parsing workflow specifically designed to o
 
 ## File: `src/logllm/utils/chunk_manager.py`
 
-*Note: While located in `utils`, this class is primarily used by analysis agents (not shown in the provided code but relevant context) to handle large text data retrieved from Elasticsearch.*
+_Note: While located in `utils`, this class is primarily used by analysis agents (not shown in the provided code but relevant context) to handle large text data retrieved from Elasticsearch._
 
 ### Class: `ESTextChunkManager`
+
 - **Purpose**: Manages the retrieval and sequential chunking of text data (like log lines associated with a file or event) stored across multiple documents in Elasticsearch. It fetches all relevant documents upfront based on an ID and then provides the text content in manageable chunks that respect LLM token limits.
 - **Key Methods**:
   - **`__init__(self, id: Any, field: str, index: str, db: ElasticsearchDatabase)`**
-    - **Description**: Initializes the chunk manager. It queries the specified `index` in Elasticsearch using `db.scroll_search` to fetch *all* documents matching the provided `id`. It stores the retrieved hits (documents) internally.
+    - **Description**: Initializes the chunk manager. It queries the specified `index` in Elasticsearch using `db.scroll_search` to fetch _all_ documents matching the provided `id`. It stores the retrieved hits (documents) internally.
     - **Parameters**:
       - `id` (Any): The identifier (e.g., file ID, event ID) used in a "match" query to find relevant documents.
       - `field` (str): The name of the field within the ES documents that contains the text content to be chunked (e.g., "content").
@@ -309,3 +328,4 @@ This file implements a more advanced parsing workflow specifically designed to o
   - **`_get_all_hits() -> list`**:
     - **Description**: Internal helper method called only by `__init__`. It constructs the Elasticsearch query to match documents based on `self.id` and fetches all matching hits using `self._db.scroll_search`, retrieving only the specified `self.field`.
     - **Returns**: (list): A list of Elasticsearch hit dictionaries (containing `_source` with the specified `field`).
+

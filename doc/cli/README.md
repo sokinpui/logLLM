@@ -49,15 +49,15 @@ Please select a command from the list below for detailed usage instructions and 
   - `run`: Processes logs from `parsed_log_*` indices, standardizes timestamps to UTC ISO 8601, and stores them in new `normalized_parsed_log_*` indices.
   - `delete`: Deletes the `normalized_parsed_log_*` indices.
 
-- **[`pm`](./pm.md):** Prompt Management.
-  - `scan`: Scans code to update the prompt JSON file structure.
-  - `list`: Lists keys in the prompt store.
-  - `add`: Adds or updates a prompt for a key.
-  - `rm`: Removes keys from the prompt store.
-  - `version`: Shows Git version history for prompts.
-  - `revert`: Reverts prompts to a previous Git commit.
-  - `diff`: Shows differences in prompts between two Git commits.
++- **[`analyze-errors`](./analyze-errors.md):** (NEW) Analyze and Summarize Error Logs from Elasticsearch.
 
----
-
-For an overview of how these commands orchestrate different parts of the `logLLM` system, refer to the main project [documentation/overview.md](../../overview.md).
+- - `run`: Executes a pipeline to filter, cluster, sample, and use an LLM to summarize error logs. Stores summaries in ES.
+- - `list`: Lists previously generated error summaries from ES.
+- - **[`pm`](./pm.md):** Prompt Management.
+    - `scan`: Scans code to update the prompt JSON file structure.
+    - `list`: Lists keys in the prompt store.
+    - `add`: Adds or updates a prompt for a key.
+    - `rm`: Removes keys from the prompt store.
+    - `version`: Shows Git version history for prompts.
+    - `revert`: Reverts prompts to a previous Git commit.
+    - `diff`: Shows differences in prompts between two Git commits.
