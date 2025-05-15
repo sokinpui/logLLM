@@ -8,12 +8,12 @@ try:
         ErrorAnalysisPipelineAgent,
         ErrorAnalysisPipelineState,
     )
-    from ..utils.llm_model import GeminiModel
-    from ..utils.database import ElasticsearchDatabase
-    from ..utils.logger import Logger
-    from ..utils.prompts_manager import PromptsManager
     from ..config import config as cfg
     from ..data_schemas.error_analysis import ErrorSummarySchema  # For printing
+    from ..utils.database import ElasticsearchDatabase
+    from ..utils.llm_model import GeminiModel
+    from ..utils.logger import Logger
+    from ..utils.prompts_manager import PromptsManager
 except ImportError as e:
     print(f"Error importing modules for 'analyze-errors' CLI: {e}", file=sys.stderr)
     sys.exit(1)
@@ -23,58 +23,100 @@ logger = Logger()
 
 def handle_analyze_errors_run(args):
     logger.info(
-        f"Executing analyze-errors run: group='{args.group}', time_window='{args.time_window}', levels='{args.log_levels}'"
-    )
+        f"Executing analyze-errors run: group='{args.group}', time_window='{args.time_window}', levels='{args.log_levels}', max_initial='{args.max_initial_errors}'"
+    )  # Added max_initial_errors to log
     print(f"Starting error analysis for group '{args.group}'...")
 
     try:
         db = ElasticsearchDatabase()
         if db.instance is None:
             print("Error: Could not connect to Elasticsearch.")
+            logger.error("ES connection failed in handle_analyze_errors_run.")
             return
 
-        # Use global --json or --test for prompts file
         json_file_path = getattr(args, "json", None) or (
             "prompts/test.json"
             if getattr(args, "test", False)
             else "prompts/prompts.json"
         )
         prompts_manager = PromptsManager(json_file=json_file_path)
-
-        # One LLM model instance for all agents
         llm_model = GeminiModel()
 
         pipeline_agent = ErrorAnalysisPipelineAgent(
             db=db, llm_model=llm_model, prompts_manager=prompts_manager
         )
 
-        # Construct the initial ES query based on args
-        # This is a basic example, make it more robust
         must_clauses = []
-        if args.log_levels:
-            levels = [level.strip().upper() for level in args.log_levels.split(",")]
-            must_clauses.append(
-                {"terms": {"log_level.keyword": levels}}
-            )  # Assuming log_level is keyword
+        # Field name for log level - **MAKE THIS CONFIGURABLE OR VERIFY IT**
+        # Let's assume it's "level.keyword" based on your Kibana screenshot,
+        # but it could also be "log_level.keyword" if your Grok parsing created that.
+        # The `es-parse` command's `ScrollGrokParserAgent` creates fields based on the Grok pattern.
+        # If your Grok pattern is like `%{LOGLEVEL:level}`, then the field is `level`.
+        # If your Grok pattern is like `%{LOGLEVEL:log_level}`, then the field is `log_level`.
+        # The `.keyword` is usually added by Elasticsearch's default dynamic mapping for strings.
 
-        # Time window (e.g., "now-24h", "now-7d")
+        # *** Key change area: Determine the correct field name for log level ***
+        # For now, let's assume the Grok pattern used by `es-parse` outputted a field named "level".
+        # If it outputted "log_level", change this.
+        log_level_field_keyword = (
+            "level.keyword"  # <<<< CHECK THIS AGAINST YOUR ACTUAL PARSED DATA
+        )
+        # log_level_field_keyword = "log_level.keyword" # Alternative if your Grok uses 'log_level'
+
+        if args.log_levels:
+            levels = [level.strip().lower() for level in args.log_levels.split(",")]
+            logger.debug(
+                f"Querying for log levels: {levels} on field '{log_level_field_keyword}'"
+            )
+            must_clauses.append({"terms": {log_level_field_keyword: levels}})
+        else:
+            # If no log levels are specified, what should happen?
+            # Option A: Error out - "Please specify log levels"
+            # Option B: Default to common error levels (current behavior via CLI default)
+            # Option C: Match all if no levels specified (probably not desired for "error analysis")
+            logger.warning(
+                "No specific log levels provided for filtering, relying on CLI default or matching all if default is empty."
+            )
+
         time_filter = {"range": {"@timestamp": {"gte": args.time_window, "lte": "now"}}}
 
         es_query = {
-            "query": {"bool": {"must": must_clauses, "filter": [time_filter]}},
-            "size": args.max_initial_errors,  # Limit initial fetch
+            "query": {
+                "bool": {
+                    "must": must_clauses,  # This will be empty if args.log_levels is empty AND no default logic
+                    "filter": [time_filter],
+                }
+            },
+            "size": args.max_initial_errors,
+            # Fetch fields relevant for clustering and summarization.
+            # Ensure these fields actually exist in your 'normalized_parsed_log_apache' index.
             "_source": [
                 "message",
                 "@timestamp",
-            ],  # Add other fields if needed by clustering/summarizer
-            # Potentially add sort by @timestamp
+                "level",
+                "class_name",
+                "thread_name",
+            ],  # Added level, class_name, thread_name
+            "sort": [{"@timestamp": "desc"}],  # Optional: sort by time
         }
+
+        # If must_clauses is empty because no log levels were effectively specified,
+        # the query will fetch all logs in the time window.
+        # This might not be what's intended for an "error analyzer".
+        if not must_clauses:
+            logger.error(
+                "The 'must_clauses' for log level filtering is empty. This will retrieve all logs in the time window. Please specify valid --log-levels."
+            )
+            # Optionally, you could prevent the query here if it's critical that levels are filtered.
+            # For now, it will proceed but log this error.
+
+        logger.debug(f"Constructed ES Query: {json.dumps(es_query, indent=2)}")
 
         initial_pipeline_state: ErrorAnalysisPipelineState = {
             "group_name": args.group,
             "es_query_for_errors": es_query,
             "clustering_params": {
-                "method": args.clustering_method,  # e.g., 'embedding_dbscan'
+                "method": args.clustering_method,
                 "eps": args.dbscan_eps,
                 "min_samples": args.dbscan_min_samples,
             },
@@ -82,7 +124,8 @@ def handle_analyze_errors_run(args):
                 "max_samples_per_cluster": args.max_samples_per_cluster,
                 "max_samples_unclustered": args.max_samples_unclustered,
             },
-            "error_log_docs": [],  # Will be filled by graph
+            # These will be populated by the graph
+            "error_log_docs": [],
             "clusters": None,
             "current_cluster_index": 0,
             "current_samples_for_summary": [],
@@ -92,6 +135,7 @@ def handle_analyze_errors_run(args):
 
         final_state = pipeline_agent.run(initial_pipeline_state)
 
+        # ... (rest of the summary printing code remains the same) ...
         print("\n--- Error Analysis Pipeline Summary ---")
         print(f"Group: {args.group}")
         print("Status Messages:")
@@ -101,14 +145,22 @@ def handle_analyze_errors_run(args):
         print(
             f"\nGenerated Summaries ({len(final_state.get('generated_summaries',[]))}):"
         )
-        for summary in final_state.get("generated_summaries", []):
-            print("-" * 20)
-            print(f"  Category: {summary.error_category}")
-            print(f"  Description: {summary.concise_description}")
-            print(f"  Original Count (Cluster/Batch): {summary.original_cluster_count}")
-            # print(json.dumps(summary.model_dump(), indent=2)) # For full details
+        if final_state.get("generated_summaries"):
+            for summary_idx, summary_data in enumerate(
+                final_state.get("generated_summaries", [])
+            ):
+                # summary_data is now the ErrorSummarySchema object
+                print("-" * 20)
+                print(f"  Summary {summary_idx + 1}:")
+                print(f"    Category: {summary_data.error_category}")
+                print(f"    Description: {summary_data.concise_description}")
+                print(
+                    f"    Original Count (Cluster/Batch): {summary_data.original_cluster_count}"
+                )
+        else:
+            print("  (No summaries were generated)")
 
-        print("\nAnalysis complete. Summaries stored in Elasticsearch.")
+        print("\nAnalysis complete. Summaries stored in Elasticsearch (if any).")
 
     except Exception as e:
         logger.error(f"Critical error during analyze-errors run: {e}", exc_info=True)
