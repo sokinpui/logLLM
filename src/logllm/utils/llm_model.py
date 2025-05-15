@@ -1,30 +1,30 @@
 # llm_model_direct_api.py
 
+import json
 import os
 import time
-import json
-from typing import Type, Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional, Type
+
+# Google Generative AI API
+import google.generativeai as genai
+from google.ai.generativelanguage import (
+    FunctionDeclaration,
+    Schema,
+    Tool,
+)
+from google.ai.generativelanguage import Type as GoogleApiType
+
+# Langchain components for embedding (can keep using this)
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 # Pydantic related imports
 from pydantic import BaseModel, Field
 from pydantic_core import PydanticUndefined
 
-# Google Generative AI API
-import google.generativeai as genai
-from google.ai.generativelanguage import (
-    Tool,
-    FunctionDeclaration,
-    Schema,
-    Type as GoogleApiType,
-)
-
-# Langchain components for embedding (can keep using this)
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from ..config import config as cfg  # Assuming config has GEMINI_LLM_MODEL
 
 # Your project's logger and config
 from .logger import Logger
-from ..config import config as cfg  # Assuming config has GEMINI_LLM_MODEL
-
 
 # --- Pydantic to Google API Tool Converter (Updated) ---
 # (Keep the previously fixed pydantic_to_google_tool function here)
@@ -108,6 +108,7 @@ def pydantic_to_google_tool(pydantic_model: Type[BaseModel]) -> Tool:
 
 # --- Rate Limiting Configuration ---
 MODEL_RPM_LIMITS = {
+    "gemini-2.5-flash-preview-04-1": 10,
     "gemini-2.5-pro-experimental": 5,
     "gemini-2.0-flash": 15,
     "gemini-2.0-flash-experimental": 10,
@@ -321,8 +322,8 @@ class GeminiModel(LLMModel):
             try:
                 text_content = response.text
                 # Check if text is empty even if no error occurred (e.g., safety blocking with no text)
-                if (
-                    not text_content and (not schema or not function_call_part)
+                if not text_content and (
+                    not schema or not function_call_part
                 ):  # Avoid false positive if struct output failed validation but text is empty
                     self._logger.warning(
                         "Response contained no text content (potentially blocked or empty generation)."
