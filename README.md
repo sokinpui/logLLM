@@ -1,17 +1,6 @@
 # logLLM: Intelligent Log Analysis Orchestration
 
-`logLLM` is a Python-based system designed for orchestrating complex log analysis workflows. It leverages Large Language Models (LLMs) for tasks like log parsing, error summarization, and pattern generation, combined with robust data handling via Elasticsearch.
-
-## Core Features
-
-- **CLI Orchestration:** A central command-line interface to manage all stages of the log analysis pipeline.
-- **Modular Agents:** Specialized agents for distinct tasks (collection, parsing, normalization, analysis).
-- **Elasticsearch Integration:** Uses Elasticsearch for log storage, querying, and as a backend for structured data and vector embeddings.
-- **LLM-Powered Insights:** Leverages LLMs (e.g., Google Gemini) for advanced log processing tasks.
-- **Grok Parsing:** Supports Grok for structured log parsing, with LLM assistance for pattern generation and validation.
-- **Timestamp Normalization:** Standardizes diverse timestamp formats to UTC ISO 8601.
-- **Error Analysis & Summarization:** A pipeline to filter, cluster, sample, and generate LLM-based summaries for error logs.
-- **Prompt Management:** Built-in version-controlled prompt management system.
+`logLLM` is a Python-based system designed for help user monitor system log under the help of AI
 
 ## Prerequisites
 
