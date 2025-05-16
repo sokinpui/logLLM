@@ -1,81 +1,93 @@
-# Overview Documentation for `logLLM` Orchestration
+### 1. Log Collection (`collect`)
 
-## Overview (Updated)
-The `logLLM` project uses a Command Line Interface (CLI) as its primary entry point, defined in `src/logllm/cli/__main__.py`. This CLI acts as the central orchestrator, dispatching tasks to various specialized modules and agents based on the user-provided command (e.g., `db`, `collect`, `parse`, `es-parse`, `pm`). The project employs a collection of potentially independent or sequentially invoked workflows managed through the CLI structure.
+- **Purpose**: Scans local directories for `.log` files, groups them by parent directory, and ingests raw log lines into Elasticsearch.
+- **Handler**: `src/logllm/cli/collect.py`
+- **Core Utility**: `src/logllm/utils/collector.py::Collector`
+- **Key Outputs (ES Indices)**:
+  - `group_infos`: Metadata about log groups and their file paths.
+  - `log_<group_name>`: Stores raw log lines for each group.
+  - `log_last_line_status`: Tracks progress for incremental collection.
+- **Workflow Example (`python -m src.logllm collect -d ./logs`)**:
+  1. `__main__.py` calls `handle_collect` in `cli/collect.py`.
+  2. `handle_collect` initializes `ElasticsearchDatabase` and `Collector`.
+  3. `Collector` scans `./logs`, groups files, and updates `group_infos`.
+  4. `Collector.insert_very_large_logs_into_db()` ingests lines into `log_<group>` indices.
 
----
+### 2. Elasticsearch-based Log Parsing (`es-parse`)
 
-## Purpose
-The CLI (`__main__.py`) and its associated command handlers (in `src/logllm/cli/`) are designed to:
-- **Provide User Interface**: Offer a clear and structured way for users to interact with the different functionalities of the `logLLM` system (database management, collection, parsing, prompt management).
-- **Dispatch Workflows**: Route user commands to the appropriate handler functions, which in turn initialize and run the necessary utility classes or agent workflows.
-- **Manage Dependencies**: Ensure that core components like the database connection, LLM model, and logger are initialized correctly for the requested command.
-- **Coordinate Functionality**: Enable different parts of the system (e.g., collection, parsing) to work together, often relying on shared resources like the Elasticsearch database and configuration settings.
+- **Purpose**: Parses raw logs already ingested into Elasticsearch (by `collect`). It uses LLM-assisted Grok pattern generation and validation, processes logs in batches, and stores structured results back into new Elasticsearch indices.
+- **Handler**: `src/logllm/cli/es_parse.py`
+- **Core Agents**:
+  - `src/logllm/agents/es_parser_agent.py::SingleGroupParserAgent` (LangGraph-based, for one group)
+  - `src/logllm/agents/es_parser_agent.py::AllGroupsParserAgent` (Orchestrates multiple `SingleGroupParserAgent` instances)
+  - `src/logllm/agents/es_parser_agent.py::ScrollGrokParserAgent` (Core ES data processing)
+- **Key Outputs (ES Indices)**:
+  - `parsed_log_<group_name>`: Successfully parsed and structured log data.
+  - `unparsed_log_<group_name>`: Logs that failed parsing or were processed by a fallback pattern.
+  - `grok_results_history`: Summary of each parsing run (status, pattern, counts).
+- **Workflow Example (`python -m src.logllm es-parse run -g hadoop`)**:
+  1. `__main__.py` calls `handle_es_parse` in `cli/es_parse.py`.
+  2. Handler initializes `ElasticsearchDatabase`, `GeminiModel`, `PromptsManager`.
+  3. Handler initializes `SingleGroupParserAgent` for "hadoop".
+  4. Agent's `run()` method executes its internal LangGraph workflow:
+     - Fetch samples from `log_hadoop`.
+     - Generate/validate Grok pattern (LLM involved).
+     - Use `ScrollGrokParserAgent` to read from `log_hadoop`, parse, and bulk-index to `parsed_log_hadoop` and `unparsed_log_hadoop`.
+     - Store run summary in `grok_results_history`.
+  5. Handler displays summary from agent's final state.
+     _(For `es-parse run` without `-g`, `AllGroupsParserAgent` manages concurrent processing of all groups.)_
 
----
+### 3. Timestamp Normalization (`normalize-ts`)
 
-## Structure and High-Level Functionality
-The orchestration layer is implemented through the `argparse` library in `__main__.py` and handler functions within the `src/logllm/cli/` directory.
+- **Purpose**: Processes logs from `parsed_log_<group_name>` indices to standardize diverse timestamp formats into UTC ISO 8601, stored in the `@timestamp` field.
+- **Handler**: `src/logllm/cli/normalize_ts.py`
+- **Core Processor**: `src/logllm/processors/timestamp_normalizer.py::TimestampNormalizerAgent`
+- **Key Outputs (ES Indices)**:
+  - `normalized_parsed_log_<group_name>`: Parsed logs with standardized `@timestamp`.
+- **Workflow Example (`python -m src.logllm normalize-ts run -g apache`)**:
+  1. Handler calls `TimestampNormalizerAgent.process_group("apache")`.
+  2. Agent scrolls `parsed_log_apache`, normalizes timestamps, and bulk-indexes results to `normalized_parsed_log_apache`.
 
-### Key Components:
-- **`src/logllm/cli/__main__.py`**:
-    - Defines the main parser and subparsers for each top-level command (`db`, `collect`, `parse`, `es-parse`, `pm`).
-    - Handles global arguments (`--verbose`, `--test`, `--json`).
-    - Registers the specific argument parsers for each command from their respective files (e.g., `collect.register_collect_parser`).
-    - Parses the command-line arguments and calls the appropriate handler function (`args.func(args)`).
-- **`src/logllm/cli/*.py` (e.g., `collect.py`, `parse.py`, `es_parse.py`, `pm.py`, `container.py`):**
-    - Each file defines the specific arguments for its command (e.g., `collect` takes `-d`). For commands with subcommands (like `es-parse`), it defines parsers for each action (`run`, `list`, `use`).
-    - Contains a registration function (e.g., `register_collect_parser`) to add its parser to the main subparser group.
-    - Contains a handler function (e.g., `handle_collect`, `handle_es_parse`, `handle_es_parse_list`) that implements the logic for that command/action, often by:
-        - Initializing necessary utilities (Database, Logger, Model, PromptsManager).
-        - Calling methods on utility classes (e.g., `Collector`, `DockerManager`).
-        - Initializing and running specific agents (e.g., `GroupLogParserAgent`, `AllGroupsParserAgent`, `SingleGroupParserAgent`).
+### 4. Error Analysis & Summarization (`analyze-errors`)
 
-### Workflow Execution:
-- Workflows are typically triggered by executing a specific CLI command.
-- **Example (`collect` command):**
-    1. User runs `python -m src.logllm collect -d ./logs`.
-    2. `__main__.py` parses the command and calls `handle_collect` in `collect.py`.
-    3. `handle_collect` initializes `ElasticsearchDatabase` and `Collector`.
-    4. It calls methods on `Collector` (e.g., `insert_very_large_logs_into_db`) to perform the collection and ingestion task into group-specific raw log indices.
-- **Example (`es-parse run` command for a single group):**
-    1. User runs `python -m src.logllm es-parse run -g hadoop`.
-    2. `__main__.py` calls `handle_es_parse` in `es_parse.py`.
-    3. `handle_es_parse` initializes `ElasticsearchDatabase`, `GeminiModel`, `PromptsManager`.
-    4. It initializes the `SingleGroupParserAgent`.
-    5. It calls the agent's `run` method, which executes the internal LangGraph workflow for parsing that specific group (including pattern generation/validation, running the `ScrollGrokParserAgent` sub-agent, and storing history).
-    6. The handler function then displays a summary based on the agent's final state.
-- **Example (`es-parse run` command for all groups):**
-    1. User runs `python -m src.logllm es-parse run -t 4`.
-    2. `__main__.py` calls `handle_es_parse` in `es_parse.py`.
-    3. `handle_es_parse` initializes `ElasticsearchDatabase`, `GeminiModel`, `PromptsManager`.
-    4. It initializes the `AllGroupsParserAgent`.
-    5. It calls the agent's `run` method, which fetches all groups and uses a `ThreadPoolExecutor` to run `SingleGroupParserAgent` instances concurrently for each group.
-    6. The handler function displays a summary of all group results.
+- **Purpose**: Filters error logs from `normalized_parsed_log_<group_name>`, (optionally) clusters them, samples representative errors, and uses an LLM to generate structured summaries.
+- **Handler**: `src/logllm/cli/analyze_errors.py`
+- **Core Agent**: `src/logllm/agents/error_analysis_pipeline_agent.py::ErrorAnalysisPipelineAgent` (LangGraph-based)
+  - Sub-agents: `ErrorClustererAgent`, `ErrorSummarizerAgent`.
+- **Key Outputs (ES Indices)**:
+  - `temp_error_analysis_<group_name>` (Temporary working index, deleted on next run for the group).
+  - `log_error_summaries`: Stores LLM-generated error summaries.
+- **Workflow Example (`python -m src.logllm analyze-errors run -g hadoop`)**:
+  1. Handler initializes `ErrorAnalysisPipelineAgent`.
+  2. Agent's `run()` method executes its LangGraph workflow:
+     - Fetch errors from `normalized_parsed_log_hadoop` into `temp_error_analysis_hadoop`.
+     - Cluster errors using `ErrorClustererAgent`.
+     - For each cluster (or unclustered batch), sample logs and use `ErrorSummarizerAgent` (with LLM) to generate an `ErrorSummarySchema`.
+     - Store summaries in `log_error_summaries`.
 
-### Agent Interaction:
-- While there isn't one overarching `graph.py`, individual commands like `es-parse run` *do* use agents built with graph-based structures (`langgraph`) internally (e.g., `SingleGroupParserAgent` in `es_parser_agent.py`).
-- Data sharing between *different* command workflows often happens implicitly via the shared Elasticsearch database (e.g., `collect` writes raw logs and group info, `parse`/`es-parse` read this data and write parsed/failed/history data to other indices).
+### Alternative: Local File Parsing (`parse`)
 
+- **Purpose**: Parses log files directly from the local filesystem using Grok patterns (LLM-assisted or user-provided) and outputs structured data to CSV files.
+- **Handler**: `src/logllm/cli/parse.py`
+- **Core Agents**:
+  - `src/logllm/agents/parser_agent.py::SimpleGrokLogParserAgent`
+  - `src/logllm/agents/parser_agent.py::GroupLogParserAgent` (if `-d` is used, relies on `group_infos` from `collect`)
+- **Key Outputs**: CSV files alongside original log files.
 
----
+## Modularity and Extensibility
 
-## Usage Notes
-- **Execution**: Run commands via `python -m src.logllm <command> [options]`.
-- **Dependencies**: Ensure required services (like Elasticsearch via `db start`) are running before executing commands that depend on them (like `collect`, `es-parse`).
-- **Configuration**: System behavior is heavily influenced by `src/logllm/config/config.py`.
-- **Modularity**: New commands or functionalities can be added by creating new files in `src/logllm/cli/`, defining their arguments, handler, and registration function, and registering them in `__main__.py`.
+The system is designed for modularity. New commands, agents, or processors can be added by:
 
----
+1. Creating new handler files in `src/logllm/cli/`.
+2. Implementing the core logic in new agent/utility files in `src/logllm/agents/` or `src/logllm/utils/`.
+3. Registering the new command's parser in `src/logllm/cli/__main__.py`.
 
-## Conceptual Example
-Instead of a single graph, think of the CLI as a switchboard:
-- `python -m src.logllm db start` -> Connects to the "Start DB Containers" workflow in `cli/container.py`.
-- `python -m src.logllm collect -d logs` -> Connects to the "Collect Logs" workflow in `cli/collect.py`.
-- `python -m src.logllm parse -d logs -t 4` -> Connects to the "Parse Local Logs (Group, Parallel)" workflow in `cli/parse.py`, which uses `GroupLogParserAgent`.
-- `python -m src.logllm es-parse run -t 4` -> Connects to the "Parse Logs in ES (All Groups, Parallel)" workflow in `cli/es_parse.py`, which uses `AllGroupsParserAgent`.
-- `python -m src.logllm es-parse list -g hadoop` -> Connects to the "List ES Parse History" workflow in `cli/es_parse.py`.
-- `python -m src.logllm pm scan -d src` -> Connects to the "Scan for Prompts" workflow in `cli/pm.py`.
+Configuration is centralized in `src/logllm/config/config.py`, allowing for easy adjustments to system behavior. Prompts are managed via `src/logllm/utils/prompts_manager.py` and the `pm` CLI command.
 
-Each command triggers a distinct (though potentially related via shared data) workflow.
+## Further Reading
 
+- **Configuration Details**: [../configurable.md](../configurable.md)
+- **Agent-Specific Documentation**: [../agents/README.md](../agents/README.md)
+- **Utility Class Documentation**: [../utils/README.md](../utils/README.md)
+- **CLI Command Reference**: [../cli/README.md](../cli/README.md)
+- **Error Analysis Pipeline**: [../error_analysis_overview.md](../error_analysis_overview.md)
