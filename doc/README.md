@@ -1,7 +1,3 @@
-# logLLM Documentation
-
-Welcome to the `logLLM` project documentation. This collection of documents aims to provide a comprehensive understanding of the system's architecture, components, and usage.
-
 ## Core Concepts & Orchestration
 
 - **[Overview](./overview.md):** High-level architecture of the `logLLM` system, focusing on the CLI as the central orchestrator and how it dispatches tasks to various modules and agents.
