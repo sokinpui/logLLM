@@ -74,16 +74,6 @@
   - `src/logllm/agents/parser_agent.py::GroupLogParserAgent` (if `-d` is used, relies on `group_infos` from `collect`)
 - **Key Outputs**: CSV files alongside original log files.
 
-## Modularity and Extensibility
-
-The system is designed for modularity. New commands, agents, or processors can be added by:
-
-1. Creating new handler files in `src/logllm/cli/`.
-2. Implementing the core logic in new agent/utility files in `src/logllm/agents/` or `src/logllm/utils/`.
-3. Registering the new command's parser in `src/logllm/cli/__main__.py`.
-
-Configuration is centralized in `src/logllm/config/config.py`, allowing for easy adjustments to system behavior. Prompts are managed via `src/logllm/utils/prompts_manager.py` and the `pm` CLI command.
-
 ## Further Reading
 
 - **Configuration Details**: [../configurable.md](../configurable.md)
