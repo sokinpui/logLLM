@@ -1,136 +1,110 @@
-# Project logLLM
+# logLLM: Intelligent Log Analysis Orchestration
 
-**logLLM** is a command-line tool and library designed to process, parse, and analyze log data using Large Language Models (LLMs) and traditional parsing techniques. It provides a modular framework integrating various utilities and agents, managed through a central Command Line Interface (CLI).
+`logLLM` is a Python-based system designed for orchestrating complex log analysis workflows. It leverages Large Language Models (LLMs) for tasks like log parsing, error summarization, and pattern generation, combined with robust data handling via Elasticsearch.
 
-## Table of Contents
+## Core Features
 
-- [Overview](#overview)
-- [Installation](#installation)
-- [Usage (CLI)](#usage-cli)
-  - [Database Management (`db`)](#database-management-db)
-  - [Log Collection (`collect`)](#log-collection-collect)
-  - [File-based Parsing (`parse`)](#file-based-parsing-parse)
-  - [Elasticsearch-based Parsing (`es-parse`)](#elasticsearch-based-parsing-es-parse)
-  - [Prompt Management (`pm`)](#prompt-management-pm)
-- [Project Structure](#project-structure)
-- [Documentation](#documentation)
-- [Contributing](#contributing)
-- [License](#license)
+- **CLI Orchestration:** A central command-line interface to manage all stages of the log analysis pipeline.
+- **Modular Agents:** Specialized agents for distinct tasks (collection, parsing, normalization, analysis).
+- **Elasticsearch Integration:** Uses Elasticsearch for log storage, querying, and as a backend for structured data and vector embeddings.
+- **LLM-Powered Insights:** Leverages LLMs (e.g., Google Gemini) for advanced log processing tasks.
+- **Grok Parsing:** Supports Grok for structured log parsing, with LLM assistance for pattern generation and validation.
+- **Timestamp Normalization:** Standardizes diverse timestamp formats to UTC ISO 8601.
+- **Error Analysis & Summarization:** A pipeline to filter, cluster, sample, and generate LLM-based summaries for error logs.
+- **Prompt Management:** Built-in version-controlled prompt management system.
 
-## Overview
+## Prerequisites
 
-This project leverages a CLI built with `argparse` to manage different functionalities:
+- Python 3.9+
+- Docker (or Colima on macOS) for running Elasticsearch & Kibana.
+- `git` (for prompt management version control).
+- Google Generative AI API Key (set as `GENAI_API_KEY` environment variable) for LLM features.
 
-- **Database Containers**: Start, stop, and manage Elasticsearch & Kibana Docker containers (`db` command).
-- **Log Collection**: Collect log files from directories and ingest them into Elasticsearch (`collect` command).
-- **Log Parsing (File-based)**: Parse local log files using Grok patterns (potentially LLM-generated) and output structured data to CSV files (`parse` command).
-- **Log Parsing (Elasticsearch-based)**: Parse raw logs already stored in Elasticsearch, generate/validate Grok patterns using LLMs, handle retries, and index structured results (or fallback data) into separate Elasticsearch indices (`es-parse` command).
-- **Prompt Management**: A tool (`pm` command) using `PromptsManager` to generate, store, manage, and version-control LLM prompts in a JSON file (default: `prompts/prompts.json`), integrated with Git for version tracking.
-- **Core Utilities**: Helper classes for database interaction, logging, data structures, LLM interaction, container management, etc. (see [utils.md](./doc/utils.md)).
-- **Agents**: Underlying logic for parsing and analysis, often using `langgraph` for workflow definition (see [agents.md](./doc/agents.md)).
-- **Configurations**: Centralized settings (`config.py`) for logging, Docker, databases, index naming, and LLM models (see [configurations.md](./doc/configurable.md)).
+## Quick Start
 
-## Installation
-
-1.  **Clone the Repository**:
+1.  **Clone the Repository:**
 
     ```bash
-    git clone https://github.com/yourusername/logLLM.git # Replace with your repo URL
-    cd logLLM
+    git clone <repository_url>
+    cd logllm
     ```
 
-2.  **Set Up a Virtual Environment** (optional but recommended):
+2.  **Set up Python Environment (Recommended):**
 
     ```bash
     python -m venv venv
     source venv/bin/activate  # On Windows: venv\Scripts\activate
+    pip install -r requirements.txt # Assuming a requirements.txt exists
     ```
 
-3.  **Install Dependencies**:
+3.  **Set `GENAI_API_KEY`:**
+    Export your Google AI API key as an environment variable:
 
     ```bash
-    pip install -r requirement.txt
+    export GENAI_API_KEY="YOUR_API_KEY"
     ```
 
-    _Note_: The prompt management (`pm`) command requires `git` installed and accessible in the system PATH for version control features. Docker (or Colima on macOS) is required for the `db` command.
+4.  **Start Backend Services (Elasticsearch & Kibana):**
+    This command uses Docker to start the necessary containers. On macOS, it may manage Colima.
 
-4.  **Set Environment Variables**:
-    - Ensure `GENAI_API_KEY` is set in your environment if using the Gemini model.
-    - Check `src/logllm/config/config.py` for other potential configuration needs.
+    ```bash
+    python -m src.logllm db start
+    ```
 
-The main entry point is `src/logllm/__main__.py`. Run commands using `python -m src.logllm <command> [options]`.
+    Wait for the services to be fully up. Elasticsearch is typically at `http://localhost:9200`, Kibana at `http://localhost:5601`.
 
-**For a comprehensive guide to all CLI commands, actions, options, and examples, please refer to the dedicated [CLI Documentation Hub](./doc/cli/README.md).**
+5.  **Collect Logs:**
+    Place your log files in a directory (e.g., `./sample_logs/`). The `collect` command will scan this directory, group logs, and ingest them into Elasticsearch.
 
-**Quick Examples:**
+    ```bash
+    # Example: assuming logs are in ./sample_logs/
+    # and this directory contains subdirectories like ./sample_logs/apache/, ./sample_logs/hadoop/
+    python -m src.logllm collect -d ./sample_logs
+    ```
 
-- Start database containers: `python -m src.logllm db start`
-- Collect logs: `python -m src.logllm collect -d ./logs`
-- Parse local file: `python -m src.logllm parse -f ./logs/some.log`
-- Parse logs in Elasticsearch for all groups: `python -m src.logllm es-parse run -t 4`
-- Normalize timestamps for a group: `python -m src.logllm normalize-ts run -g apache`
-- Scan for prompts: `python -m src.logllm pm scan -d src/logllm/agents -r`
+6.  **Parse Logs in Elasticsearch:**
+    This command processes the raw logs collected into Elasticsearch, generates Grok patterns (LLM-assisted), parses the logs, and stores structured results back into new Elasticsearch indices.
 
-Refer to the [Global Options documentation](./doc/cli/global_options.md) for options like `--verbose`, `--test`, and `--json` that apply across commands.
+    ```bash
+    # Parse all collected groups using 2 worker threads
+    python -m src.logllm es-parse run -t 2
+    ```
 
-## Project Structure
+    - Parsed logs go to `parsed_log_<group_name>`.
+    - Unparsed/fallback logs go to `unparsed_log_<group_name>`.
+    - History of parsing runs is stored in `grok_results_history`.
 
-```
-logLLM/
-├── doc/
-│   ├── cli/
-│   │   ├── README.md
-│   │   ├── global_options.md
-│   │   ├── db.md
-│   │   ├── collect.md
-│   │   ├── parse.md
-│   │   ├── es-parse.md
-│   │   ├── normalize-ts.md
-│   │   └── pm.md
-│   ├── agents.md
-│   ├── configurations.md
-│   ├── overview.md
-│   ├── prompts_manager.md
-│   └── utils.md
-├── logs/
-├── models/
-├── prompts/
-│   └── .git/
-├── src/
-│   └── logllm/
-│       ├── __init__.py
-│       ├── __main__.py
-│       ├── agents/
-│       ├── cli/
-│       ├── config/
-│       ├── processors/
-│       └── utils/
-├── .gitignore
-├── pyproject.toml
-├── requirement.txt
-├── README.md
-└── movelook.log
-```
+7.  **Normalize Timestamps:**
+    Process the parsed logs to standardize their timestamps to UTC ISO 8601.
 
-## Documentation
+    ```bash
+    # Normalize timestamps for all groups that were parsed
+    python -m src.logllm normalize-ts run --all-groups -t 2
+    ```
 
-- **[CLI Documentation Hub](./doc/cli/README.md)**: Comprehensive guide for all CLI commands.
-- **[agents.md](./doc/agents.md)**: Agent details.
-- **[configurations.md](./doc/configurable.md)**: Config settings (`config.py`).
-- **[utils.md](./doc/utils.md)**: Utility module documentation.
-- **[prompt_manager.md](./doc/prompts_manager.md)**: Detailed guide for the `pm` command and `PromptsManager` class (also covered in CLI docs).
-- **[overview.md](./doc/overview.md)**: High-level overview of CLI orchestration.
+    - Normalized logs are stored in `normalized_parsed_log_<group_name>`.
 
-## Contributing
+8.  **Analyze Errors (Example):**
+    Run the error analysis pipeline on a specific group's normalized logs.
 
-Contributions are welcome! Please:
+    ```bash
+    # Analyze errors for the 'apache' group from the last 7 days
+    python -m src.logllm analyze-errors run -g apache --time-window "now-7d"
+    ```
 
-1. Fork the repository.
-2. Create a feature branch (`git checkout -b feature/xyz`).
-3. Commit changes (`git commit -m "Add xyz feature"`).
-4. Push to the branch (`git push origin feature/xyz`).
-5. Open a pull request.
+    - Summaries are stored in `log_error_summaries`.
 
-## License
+9.  **Explore Other Commands:**
+    - `python -m src.logllm pm scan -d src/logllm/agents -r`: Scan for prompts.
+    - `python -m src.logllm parse -f /path/to/single.log`: Parse a single local file.
+    - Use `--help` for any command to see its options (e.g., `python -m src.logllm es-parse list --help`).
 
-[MIT License](./LICENSE) - feel free to use, modify, and distribute this project.
+## Full Documentation
+
+For detailed information on architecture, individual commands, agents, and configuration, please refer to the [./doc/README.md](./doc/README.md).
+
+## Stopping Services
+
+    ```bash
+    python -m src.logllm db stop
+    ```

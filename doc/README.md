@@ -1,3 +1,7 @@
+# logLLM Documentation
+
+Welcome to the `logLLM` project documentation. This collection of documents aims to provide a comprehensive understanding of the system's architecture, components, and usage.
+
 ## Core Concepts & Orchestration
 
 - **[Overview](./overview.md):** High-level architecture of the `logLLM` system, focusing on the CLI as the central orchestrator and how it dispatches tasks to various modules and agents.
@@ -9,8 +13,13 @@
 
 ## Utilities & Managers
 
-- **[Utility Modules](./utils.md):** Documents various utility classes and functions found in `src/logllm/utils/`, such as database interaction (`database.py`), LLM model abstractions (`llm_model.py`), data structures (`data_struct.py`), Docker container management (`container_manager.py`), logging (`logger.py`), log collection (`collector.py`), RAG capabilities (`rag_manager.py`), and text chunking (`chunk_manager.py`).
-- **[Prompt Management](./prompts_manager.md):** In-depth guide to the `PromptsManager` class and the `pm` CLI command for managing, versioning, and utilizing LLM prompts.
+- **[Utility Modules](./utils/README.md):** An index and overview of utility classes and functions found in `src/logllm/utils/`, with links to detailed documentation for each utility module.
+
+## Prompt Management
+
+- **[Prompt Management Overview](./prompts_manager.md):** Overview of the prompt management system, linking to utility class details and CLI command documentation.
+  - For `PromptsManager` class details: See [./utils/prompts_manager_utility.md](./utils/prompts_manager_utility.md).
+  - For `pm` CLI command details: See [./cli/pm.md](./cli/pm.md).
 
 ## Error Analysis Pipeline
 
