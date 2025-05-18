@@ -1,7 +1,7 @@
-# src/logllm/agents/error_analysis_pipeline_agent.py (NEW FILE)
+# src/logllm/agents/error_analysis_pipeline_agent.py
 from typing import Any, Dict, List, Optional
 
-from elasticsearch.helpers import bulk
+# from elasticsearch.helpers import bulk # Not directly used here anymore
 from langgraph.graph import END, StateGraph
 from langgraph.graph.graph import CompiledGraph
 
@@ -13,9 +13,7 @@ from ..data_schemas.error_analysis import (
     LogDocument,
 )
 from ..utils.database import ElasticsearchDatabase
-from ..utils.llm_model import (  # For embeddings in clusterer, and generation in summarizer
-    LLMModel,
-)
+from ..utils.llm_model import LLMModel
 from ..utils.logger import Logger
 from ..utils.prompts_manager import PromptsManager
 from .error_clusterer_agent import ErrorClustererAgent
@@ -39,9 +37,8 @@ class ErrorAnalysisPipelineAgent:
             llm_model=llm_model, prompts_manager=prompts_manager
         )
 
-        self.graph: CompiledGraph = self._build_graph()  # type hint for self.graph
+        self.graph: CompiledGraph = self._build_graph()
 
-    # --- Graph Node Implementations ---
     def _fetch_initial_errors_node(
         self, state: ErrorAnalysisPipelineState
     ) -> Dict[str, Any]:
@@ -50,7 +47,6 @@ class ErrorAnalysisPipelineAgent:
         status_msgs = state.get("status_messages", [])
 
         self.logger.info(f"[{group_name}] Fetching initial error logs using query.")
-
         source_index_for_errors = cfg.get_normalized_parsed_log_storage_index(
             group_name
         )
@@ -64,7 +60,6 @@ class ErrorAnalysisPipelineAgent:
         error_docs: List[LogDocument] = []
 
         try:
-            # 1. Delete the working index if it exists
             if self.db.instance.indices.exists(index=working_index_name):
                 self.logger.info(
                     f"[{group_name}] Deleting existing working index: {working_index_name}"
@@ -74,25 +69,12 @@ class ErrorAnalysisPipelineAgent:
                 )
                 status_msgs.append(f"Deleted old working index {working_index_name}.")
 
-            # 2. Create the working index (dynamic mapping should be fine for temp use)
-            # self.db.instance.indices.create(index=working_index_name, ignore=400) # 400 if already exists (race condition)
-            # logger.info(f"[{group_name}] Created new working index: {working_index_name}")
-            # No explicit create needed if we're just going to bulk index; ES will create it.
-
-            # 3. Fetch error logs from the original source index
-            self.logger.info(
-                f"[{group_name}] Querying original source '{source_index_for_errors}' for errors."
-            )
-
-            # Ensure the query body for fetching includes _source
             if "_source" not in es_query_for_errors:
-                es_query_for_errors["_source"] = (
-                    True  # Fetch all source fields by default if not specified
-                )
+                es_query_for_errors["_source"] = True
 
             all_hits_from_source = self.db.scroll_search(
                 index=source_index_for_errors,
-                query=es_query_for_errors,  # This query already contains size and _source
+                query=es_query_for_errors,
             )
             self.logger.info(
                 f"[{group_name}] Fetched {len(all_hits_from_source)} raw documents from '{source_index_for_errors}'."
@@ -102,14 +84,15 @@ class ErrorAnalysisPipelineAgent:
                 status_msgs.append(
                     f"Fetched 0 error logs from {source_index_for_errors}."
                 )
-                return {"error_log_docs": [], "status_messages": status_msgs}
+                return {
+                    "error_log_docs": [],
+                    "status_messages": status_msgs,
+                    "clusters": None,
+                }
 
-            # 4. Bulk index these fetched logs into the working index
             actions_to_bulk = []
             for hit in all_hits_from_source:
-                if (
-                    "_source" in hit and "_id" in hit
-                ):  # Ensure document has source and id
+                if "_source" in hit and "_id" in hit:
                     actions_to_bulk.append(
                         {
                             "_index": working_index_name,
@@ -117,16 +100,13 @@ class ErrorAnalysisPipelineAgent:
                             "_source": hit["_source"],
                         }
                     )
-                    # Also prepare the in-memory list for subsequent pipeline steps
                     error_docs.append({"_id": hit["_id"], "_source": hit["_source"]})
 
             if actions_to_bulk:
                 self.logger.info(
                     f"[{group_name}] Bulk indexing {len(actions_to_bulk)} documents into '{working_index_name}'."
                 )
-                success_count, errors = self.db.bulk_operation(
-                    actions=actions_to_bulk
-                )  # Use the robust bulk_operation
+                success_count, errors = self.db.bulk_operation(actions=actions_to_bulk)
                 if errors:
                     self.logger.error(
                         f"[{group_name}] Errors during bulk indexing to working index: {errors[:3]}"
@@ -147,7 +127,11 @@ class ErrorAnalysisPipelineAgent:
                 )
 
             status_msgs.append(f"Fetched {len(error_docs)} error logs for processing.")
-            return {"error_log_docs": error_docs, "status_messages": status_msgs}
+            return {
+                "error_log_docs": error_docs,
+                "status_messages": status_msgs,
+                "clusters": None,
+            }
 
         except Exception as e:
             self.logger.error(
@@ -155,13 +139,17 @@ class ErrorAnalysisPipelineAgent:
                 exc_info=True,
             )
             status_msgs.append(f"ERROR: Failed fetch/store to working index: {e}")
-            return {"error_log_docs": [], "status_messages": status_msgs}
+            return {
+                "error_log_docs": [],
+                "status_messages": status_msgs,
+                "clusters": None,
+            }
 
     def _cluster_errors_node(self, state: ErrorAnalysisPipelineState) -> Dict[str, Any]:
-        self.logger.info("Clustering error logs...")
+        self.logger.info(f"[{state['group_name']}] Clustering error logs...")
         status_msgs = state.get("status_messages", [])
         if not state["error_log_docs"]:
-            self.logger.warning("No error logs to cluster.")
+            self.logger.warning(f"[{state['group_name']}] No error logs to cluster.")
             return {
                 "clusters": [],
                 "current_cluster_index": 0,
@@ -175,19 +163,26 @@ class ErrorAnalysisPipelineAgent:
             min_samples=clustering_params.get(
                 "min_samples", cfg.DEFAULT_DBSCAN_MIN_SAMPLES
             ),
+            max_docs_for_clustering=clustering_params.get(
+                "max_docs_for_clustering", cfg.DEFAULT_MAX_DOCS_FOR_CLUSTERING
+            ),
         )
-        self.logger.info(f"Clustering resulted in {len(clusters)} clusters.")
+        self.logger.info(
+            f"[{state['group_name']}] Clustering resulted in {len(clusters)} clusters."
+        )
         return {
             "clusters": clusters,
-            "current_cluster_index": 0,  # Initialize index for the loop
-            "status_messages": status_msgs + [f"Found {len(clusters)} clusters."],
+            "current_cluster_index": 0,
+            "status_messages": status_msgs
+            + [f"Found {len(clusters)} clusters (incl. noise if any)."],
         }
 
     def _sample_and_summarize_cluster_node(
         self, state: ErrorAnalysisPipelineState
     ) -> Dict[str, Any]:
-        current_idx = state["current_cluster_index"]  # Index of the cluster to process
-        cluster = state["clusters"][current_idx]
+        current_idx = state["current_cluster_index"]
+        # We can be sure 'clusters' exists and is not None here due to graph flow
+        cluster = state["clusters"][current_idx]  # type: ignore
         group_name = state["group_name"]
         sampling_params = state.get("sampling_params", {})
         max_samples = sampling_params.get(
@@ -195,7 +190,7 @@ class ErrorAnalysisPipelineAgent:
         )
 
         self.logger.info(
-            f"Processing cluster ID {cluster['cluster_id']} (loop index: {current_idx}, count: {cluster['count']}) for group {group_name}"
+            f"[{group_name}] Processing cluster ID {cluster['cluster_id']} (loop index: {current_idx}, count: {cluster['count']})"
         )
 
         samples_for_summary = cluster["example_log_docs"][:max_samples]
@@ -219,28 +214,27 @@ class ErrorAnalysisPipelineAgent:
                 f"Generated summary for cluster ID {cluster['cluster_id']}."
             )
             self.logger.info(
-                f"Summary generated for cluster ID {cluster['cluster_id']}."
+                f"[{group_name}] Summary generated for cluster ID {cluster['cluster_id']}."
             )
         else:
             status_msgs.append(
                 f"Failed to generate summary for cluster ID {cluster['cluster_id']}."
             )
             self.logger.warning(
-                f"Failed to summarize cluster ID {cluster['cluster_id']}."
+                f"[{group_name}] Failed to summarize cluster ID {cluster['cluster_id']}."
             )
 
         return {
             "generated_summaries": new_summaries,
             "status_messages": status_msgs,
-            "current_cluster_index": current_idx
-            + 1,  # Return the *next* index to be considered
+            "current_cluster_index": current_idx + 1,
         }
 
     def _sample_and_summarize_unclustered_node(
         self, state: ErrorAnalysisPipelineState
     ) -> Dict[str, Any]:
-        self.logger.info("Processing unclustered errors (or fallback from clustering).")
         group_name = state["group_name"]
+        self.logger.info(f"[{group_name}] Processing unclustered errors (or fallback).")
         sampling_params = state.get("sampling_params", {})
         max_samples = sampling_params.get(
             "max_samples_unclustered", cfg.DEFAULT_MAX_SAMPLES_UNCLUSTERED_FOR_SUMMARY
@@ -248,14 +242,16 @@ class ErrorAnalysisPipelineAgent:
         status_msgs = state.get("status_messages", [])
 
         if not state["error_log_docs"]:
+            self.logger.warning(f"[{group_name}] No unclustered logs to summarize.")
             return {
                 "status_messages": status_msgs + ["No unclustered logs to summarize."]
             }
 
         import random
 
+        docs_to_sample_from = state["error_log_docs"]
         samples_for_summary = random.sample(
-            state["error_log_docs"], min(len(state["error_log_docs"]), max_samples)
+            docs_to_sample_from, min(len(docs_to_sample_from), max_samples)
         )
 
         summary = self.summarizer.run(
@@ -266,12 +262,16 @@ class ErrorAnalysisPipelineAgent:
         if summary:
             new_summaries.append(summary)
             status_msgs.append("Generated summary for unclustered/fallback batch.")
-            self.logger.info("Summary generated for unclustered/fallback batch.")
+            self.logger.info(
+                f"[{group_name}] Summary generated for unclustered/fallback batch."
+            )
         else:
             status_msgs.append(
                 "Failed to generate summary for unclustered/fallback batch."
             )
-            self.logger.warning("Failed to summarize unclustered/fallback batch.")
+            self.logger.warning(
+                f"[{group_name}] Failed to summarize unclustered/fallback batch."
+            )
 
         return {"generated_summaries": new_summaries, "status_messages": status_msgs}
 
@@ -280,7 +280,10 @@ class ErrorAnalysisPipelineAgent:
     ) -> Dict[str, Any]:
         generated_summaries = state.get("generated_summaries", [])
         status_msgs = state.get("status_messages", [])
-        self.logger.info(f"Storing {len(generated_summaries)} summaries.")
+        group_name = state["group_name"]
+        self.logger.info(
+            f"[{group_name}] Storing {len(generated_summaries)} summaries."
+        )
         stored_count = 0
         for summary_obj in generated_summaries:
             try:
@@ -290,70 +293,117 @@ class ErrorAnalysisPipelineAgent:
                 stored_count += 1
             except Exception as e:
                 self.logger.error(
-                    f"Failed to store summary: {getattr(summary_obj, 'error_category', 'N/A')} - {e}",
+                    f"[{group_name}] Failed to store summary: {getattr(summary_obj, 'error_category', 'N/A')} - {e}",
                     exc_info=True,
                 )
                 status_msgs.append(f"ERROR storing summary: {e}")
 
-        return {"status_messages": status_msgs + [f"Stored {stored_count} summaries."]}
+        final_status_message = f"Stored {stored_count} summaries."
+        if stored_count == 0 and len(generated_summaries) > 0:
+            final_status_message = "Attempted to store summaries, but 0 were successfully stored (check logs)."
+        elif stored_count == 0 and len(generated_summaries) == 0:
+            final_status_message = "No summaries were generated to store."
 
-    # --- Conditional Edges ---
+        return {"status_messages": status_msgs + [final_status_message]}
+
     def _decide_clustering_outcome(self, state: ErrorAnalysisPipelineState) -> str:
         clusters = state.get("clusters")
-        status_msgs = state.get("status_messages", [])
+        # status_msgs will be updated directly in the state by the node if needed,
+        # or can be appended here to a copy if preferred.
+        group_name = state["group_name"]
+
+        if not state["error_log_docs"]:
+            self.logger.warning(
+                f"[{group_name}] No error logs fetched, skipping to end."
+            )
+            return "finish_cluster_processing"
 
         if clusters and len(clusters) > 0:
-            if all(
-                c["cluster_id"] == -1 for c in clusters if c
-            ):  # Check if all are noise
+            has_meaningful_cluster = any(
+                c["cluster_id"] != -1 and c["count"] > 0 for c in clusters if c
+            ) or any(
+                c["cluster_id"] == -1 and c["count"] > 0 for c in clusters if c
+            )  # Noise cluster with docs is meaningful
+
+            if not has_meaningful_cluster:
                 self.logger.warning(
-                    "Clustering resulted only in noise. Falling back to unclustered summarization."
+                    f"[{group_name}] Clustering resulted only in empty or pure noise clusters. Falling back."
                 )
-                status_msgs.append(
-                    "Clustering resulted only in noise, using fallback summarization."
-                )
+                # Update status_messages in state if this decision path is taken
+                # state["status_messages"] = state.get("status_messages", []) + ["Clustering resulted in no meaningful data clusters, using fallback summarization."]
                 return "summarize_unclustered_fallback"
-            self.logger.info(f"Proceeding with {len(clusters)} clusters.")
-            status_msgs.append(
-                f"Clustering successful, proceeding to summarize {len(clusters)} clusters."
+
+            self.logger.info(
+                f"[{group_name}] Proceeding with {len(clusters)} cluster results."
             )
-            # State update current_cluster_index is already done by _cluster_errors_node
-            return "check_cluster_loop_condition"  # Go to the loop condition checker
+            # state["status_messages"] = state.get("status_messages", []) + [f"Clustering successful, proceeding to summarize {len(clusters)} cluster results (incl. noise if any)."]
+            return "check_cluster_loop_condition"
         else:
             self.logger.warning(
-                "No clusters found or clustering failed. Falling back to unclustered summarization."
+                f"[{group_name}] No clusters found or clustering step failed. Falling back."
             )
-            status_msgs.append("No valid clusters found, using fallback summarization.")
+            # state["status_messages"] = state.get("status_messages", []) + ["No valid clusters found or clustering failed, using fallback summarization."]
             return "summarize_unclustered_fallback"
 
-    def _check_cluster_loop_condition_node(
-        self, state: ErrorAnalysisPipelineState
-    ) -> str:
+    # This function is now purely for conditional branching logic
+    def _conditional_check_cluster_loop(self, state: ErrorAnalysisPipelineState) -> str:
         """Condition to decide if there are more clusters to process."""
         current_idx = state.get("current_cluster_index", 0)
-        clusters = state.get("clusters", [])
-        if current_idx < len(clusters):
+        clusters = state.get("clusters", [])  # clusters could be None if fetch failed
+        group_name = state["group_name"]
+
+        if not clusters:  # Handle case where clusters might be None
             self.logger.debug(
-                f"Loop condition: YES, process cluster at index {current_idx}"
+                f"[{group_name}] Loop condition: NO, clusters list is not available."
+            )
+            return "finish_cluster_processing"
+
+        if current_idx < len(clusters):
+            current_cluster_to_process = clusters[current_idx]
+            if current_cluster_to_process["count"] == 0:
+                self.logger.warning(
+                    f"[{group_name}] Skipping cluster ID {current_cluster_to_process['cluster_id']} at index {current_idx} as it has zero documents (will re-evaluate loop)."
+                )
+                # To effectively skip, we need the node to increment the index.
+                # This conditional logic should ideally point to a node that increments
+                # and then back to itself, or the node "process_this_cluster" must handle
+                # the zero count case gracefully and increment.
+                # For simplicity, let's assume _check_cluster_loop_node (if it existed as a state updater)
+                # would increment the index. Here, we'll just say "process" and let the target node skip.
+                # OR, a better approach: Point to a small "increment_and_loop" node.
+                # For now, we will rely on process_this_cluster to increment.
+                # Actually, the current _check_cluster_loop_node in the graph structure is the one that *returns* the decision string.
+                # The node *itself* must return a state update if it modifies current_cluster_index.
+                # Let's ensure `process_this_cluster` always increments `current_cluster_index`.
+                # The `_sample_and_summarize_cluster_node` already increments `current_cluster_index`.
+                return "process_this_cluster"  # It will be processed, sample_and_summarize will increment index.
+
+            self.logger.debug(
+                f"[{group_name}] Loop condition: YES, process cluster at index {current_idx} (ID: {clusters[current_idx]['cluster_id']})"
             )
             return "process_this_cluster"
         else:
             self.logger.debug(
-                f"Loop condition: NO, all {len(clusters)} clusters processed."
+                f"[{group_name}] Loop condition: NO, all {len(clusters)} clusters processed."
             )
             return "finish_cluster_processing"
 
-    # --- Build Graph ---
+    # Node that does nothing but allow branching.
+    def _passthrough_node(self, state: ErrorAnalysisPipelineState) -> Dict[str, Any]:
+        """A simple node that makes no changes to the state, used for branching."""
+        return {}
+
     def _build_graph(self) -> CompiledGraph:
         workflow = StateGraph(ErrorAnalysisPipelineState)
 
         workflow.add_node("fetch_initial_errors", self._fetch_initial_errors_node)
         workflow.add_node("cluster_errors", self._cluster_errors_node)
 
-        # This node acts as the entry point and decision point for the cluster processing loop
+        # This node is just a branching point. It doesn't modify state.
+        # The conditional logic for this branch point is provided by _conditional_check_cluster_loop
         workflow.add_node(
-            "check_cluster_loop_condition", lambda state: {}
-        )  # Simple pass-through node for the condition
+            "check_cluster_loop_condition_branch_point", self._passthrough_node
+        )
 
         workflow.add_node(
             "sample_and_summarize_cluster", self._sample_and_summarize_cluster_node
@@ -364,36 +414,35 @@ class ErrorAnalysisPipelineAgent:
         )
         workflow.add_node("store_summaries", self._store_summaries_node)
 
-        # Define Edges
         workflow.set_entry_point("fetch_initial_errors")
         workflow.add_edge("fetch_initial_errors", "cluster_errors")
 
+        # Conditional edge after clustering
         workflow.add_conditional_edges(
-            "cluster_errors",
-            self._decide_clustering_outcome,
-            {
-                "check_cluster_loop_condition": "check_cluster_loop_condition",
+            "cluster_errors",  # Source node
+            self._decide_clustering_outcome,  # Path mapper function
+            {  # Destination map
+                "check_cluster_loop_condition": "check_cluster_loop_condition_branch_point",  # Go to the branch point
                 "summarize_unclustered_fallback": "summarize_unclustered_fallback_node",
+                "finish_cluster_processing": "store_summaries",
             },
         )
 
-        # Cluster processing loop logic
+        # Conditional edge for the loop itself, originating from the branch point
         workflow.add_conditional_edges(
-            "check_cluster_loop_condition",
-            self._check_cluster_loop_condition_node,
-            {
+            "check_cluster_loop_condition_branch_point",  # Source is the branch point node
+            self._conditional_check_cluster_loop,  # Path mapper function that decides next step
+            {  # Destination map
                 "process_this_cluster": "sample_and_summarize_cluster",
                 "finish_cluster_processing": "store_summaries",
             },
         )
 
-        # After processing a cluster, its state (with incremented current_cluster_index)
-        # flows back to check_cluster_loop_condition.
+        # After processing a cluster, it goes back to the branch point to re-evaluate the loop condition
         workflow.add_edge(
-            "sample_and_summarize_cluster", "check_cluster_loop_condition"
+            "sample_and_summarize_cluster", "check_cluster_loop_condition_branch_point"
         )
 
-        # Edge from fallback to storage
         workflow.add_edge("summarize_unclustered_fallback_node", "store_summaries")
         workflow.add_edge("store_summaries", END)
 
@@ -403,33 +452,25 @@ class ErrorAnalysisPipelineAgent:
         self.logger.info(
             f"Starting Error Analysis Pipeline for group: {initial_state_input['group_name']}"
         )
-
-        # Ensure the input conforms to ErrorAnalysisPipelineState, providing defaults for optional fields
-        # This helps if the caller provides a simpler dict.
-        # LangGraph expects the input to `invoke` to match the State TypedDict.
-
-        # Initialize with all keys expected by ErrorAnalysisPipelineState, using provided values or defaults
         graph_input_state: ErrorAnalysisPipelineState = {
             "group_name": initial_state_input["group_name"],
             "es_query_for_errors": initial_state_input["es_query_for_errors"],
             "clustering_params": initial_state_input.get("clustering_params", {}),
             "sampling_params": initial_state_input.get("sampling_params", {}),
-            "error_log_docs": initial_state_input.get(
-                "error_log_docs", []
-            ),  # Initial fetch will populate
-            "clusters": initial_state_input.get("clusters"),  # Will be None initially
-            "current_cluster_index": initial_state_input.get(
-                "current_cluster_index", 0
-            ),
-            "current_samples_for_summary": initial_state_input.get(
-                "current_samples_for_summary", []
-            ),
-            "generated_summaries": initial_state_input.get("generated_summaries", []),
-            "status_messages": initial_state_input.get("status_messages", []),
+            "error_log_docs": [],
+            "clusters": None,
+            "current_cluster_index": 0,
+            "current_samples_for_summary": [],
+            "generated_summaries": [],
+            "status_messages": [],
         }
 
-        final_state = self.graph.invoke(graph_input_state)
+        # Ensure all keys from ErrorAnalysisPipelineState are present in graph_input_state
+        # This is mostly for type hinting and ensuring the TypedDict is satisfied.
+        # The graph should correctly populate or handle missing optional fields.
+        final_state = self.graph.invoke(graph_input_state)  # type: ignore
+
         self.logger.info(
             f"Error Analysis Pipeline finished. Status messages: {final_state.get('status_messages')}"
         )
-        return final_state
+        return final_state  # type: ignore

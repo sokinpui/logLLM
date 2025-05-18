@@ -1,4 +1,4 @@
-# src/logllm/cli/analyze_errors.py (NEW FILE)
+# src/logllm/cli/analyze_errors.py
 import argparse
 import json
 import sys
@@ -9,9 +9,9 @@ try:
         ErrorAnalysisPipelineState,
     )
     from ..config import config as cfg
-    from ..data_schemas.error_analysis import ErrorSummarySchema  # For printing
+    from ..data_schemas.error_analysis import ErrorSummarySchema
     from ..utils.database import ElasticsearchDatabase
-    from ..utils.llm_model import GeminiModel
+    from ..utils.llm_model import GeminiModel  # Ensure GeminiModel is imported
     from ..utils.logger import Logger
     from ..utils.prompts_manager import PromptsManager
 except ImportError as e:
@@ -23,8 +23,8 @@ logger = Logger()
 
 def handle_analyze_errors_run(args):
     logger.info(
-        f"Executing analyze-errors run: group='{args.group}', time_window='{args.time_window}', levels='{args.log_levels}', max_initial='{args.max_initial_errors}'"
-    )  # Added max_initial_errors to log
+        f"Executing analyze-errors run: group='{args.group}', time_window='{args.time_window}', levels='{args.log_levels}', max_initial='{args.max_initial_errors}', max_cluster_docs='{args.max_docs_for_clustering}'"
+    )
     print(f"Starting error analysis for group '{args.group}'...")
     working_index_name = cfg.get_error_analysis_working_index(args.group)
     print(
@@ -44,40 +44,26 @@ def handle_analyze_errors_run(args):
             else "prompts/prompts.json"
         )
         prompts_manager = PromptsManager(json_file=json_file_path)
-        llm_model = GeminiModel()
+        llm_model = GeminiModel()  # Using GeminiModel directly
 
         pipeline_agent = ErrorAnalysisPipelineAgent(
             db=db, llm_model=llm_model, prompts_manager=prompts_manager
         )
 
         must_clauses = []
-        # Field name for log level - **MAKE THIS CONFIGURABLE OR VERIFY IT**
-        # Let's assume it's "level.keyword" based on your Kibana screenshot,
-        # but it could also be "log_level.keyword" if your Grok parsing created that.
-        # The `es-parse` command's `ScrollGrokParserAgent` creates fields based on the Grok pattern.
-        # If your Grok pattern is like `%{LOGLEVEL:level}`, then the field is `level`.
-        # If your Grok pattern is like `%{LOGLEVEL:log_level}`, then the field is `log_level`.
-        # The `.keyword` is usually added by Elasticsearch's default dynamic mapping for strings.
-
-        # *** Key change area: Determine the correct field name for log level ***
-        # For now, let's assume the Grok pattern used by `es-parse` outputted a field named "level".
-        # If it outputted "log_level", change this.
         log_level_field_keyword = (
-            "level.keyword"  # <<<< CHECK THIS AGAINST YOUR ACTUAL PARSED DATA
+            "level.keyword"  # Default, ensure this matches your Grok output
         )
-        # log_level_field_keyword = "log_level.keyword" # Alternative if your Grok uses 'log_level'
 
         if args.log_levels:
-            levels = [level.strip().lower() for level in args.log_levels.split(",")]
+            levels = [
+                level.strip().lower() for level in args.log_levels.split(",")
+            ]  # Convert to lowercase
             logger.debug(
                 f"Querying for log levels: {levels} on field '{log_level_field_keyword}'"
             )
             must_clauses.append({"terms": {log_level_field_keyword: levels}})
         else:
-            # If no log levels are specified, what should happen?
-            # Option A: Error out - "Please specify log levels"
-            # Option B: Default to common error levels (current behavior via CLI default)
-            # Option C: Match all if no levels specified (probably not desired for "error analysis")
             logger.warning(
                 "No specific log levels provided for filtering, relying on CLI default or matching all if default is empty."
             )
@@ -87,32 +73,25 @@ def handle_analyze_errors_run(args):
         es_query = {
             "query": {
                 "bool": {
-                    "must": must_clauses,  # This will be empty if args.log_levels is empty AND no default logic
+                    "must": must_clauses,
                     "filter": [time_filter],
                 }
             },
             "size": args.max_initial_errors,
-            # Fetch fields relevant for clustering and summarization.
-            # Ensure these fields actually exist in your 'normalized_parsed_log_apache' index.
             "_source": [
                 "message",
                 "@timestamp",
-                "level",
-                "class_name",
-                "thread_name",
-            ],  # Added level, class_name, thread_name
-            "sort": [{"@timestamp": "desc"}],  # Optional: sort by time
+                "level",  # Make sure 'level' exists, not 'level.keyword' in _source
+                "class_name",  # If it exists
+                "thread_name",  # If it exists
+            ],
+            "sort": [{"@timestamp": "desc"}],
         }
 
-        # If must_clauses is empty because no log levels were effectively specified,
-        # the query will fetch all logs in the time window.
-        # This might not be what's intended for an "error analyzer".
         if not must_clauses:
             logger.error(
                 "The 'must_clauses' for log level filtering is empty. This will retrieve all logs in the time window. Please specify valid --log-levels."
             )
-            # Optionally, you could prevent the query here if it's critical that levels are filtered.
-            # For now, it will proceed but log this error.
 
         logger.debug(f"Constructed ES Query: {json.dumps(es_query, indent=2)}")
 
@@ -123,12 +102,12 @@ def handle_analyze_errors_run(args):
                 "method": args.clustering_method,
                 "eps": args.dbscan_eps,
                 "min_samples": args.dbscan_min_samples,
+                "max_docs_for_clustering": args.max_docs_for_clustering,  # Pass new arg
             },
             "sampling_params": {
                 "max_samples_per_cluster": args.max_samples_per_cluster,
                 "max_samples_unclustered": args.max_samples_unclustered,
             },
-            # These will be populated by the graph
             "error_log_docs": [],
             "clusters": None,
             "current_cluster_index": 0,
@@ -139,7 +118,6 @@ def handle_analyze_errors_run(args):
 
         final_state = pipeline_agent.run(initial_pipeline_state)
 
-        # ... (rest of the summary printing code remains the same) ...
         print("\n--- Error Analysis Pipeline Summary ---")
         print(f"Group: {args.group}")
         print("Status Messages:")
@@ -153,7 +131,6 @@ def handle_analyze_errors_run(args):
             for summary_idx, summary_data in enumerate(
                 final_state.get("generated_summaries", [])
             ):
-                # summary_data is now the ErrorSummarySchema object
                 print("-" * 20)
                 print(f"  Summary {summary_idx + 1}:")
                 print(f"    Category: {summary_data.error_category}")
@@ -181,7 +158,9 @@ def handle_analyze_errors_list(args):
             print("Error: Could not connect to Elasticsearch.")
             return
 
-        query_body: Dict[str, Any] = {"sort": [{"analysis_timestamp": "desc"}]}
+        query_body: Dict[str, Any] = {
+            "sort": [{"analysis_timestamp": "desc"}]
+        }  # Corrected field name
         if args.group:
             query_body["query"] = {"term": {"group_name.keyword": args.group}}
         else:
@@ -200,7 +179,6 @@ def handle_analyze_errors_list(args):
         for hit in results:
             summary_data = hit["_source"]
             try:
-                # Validate against schema for consistent printing, or just print fields
                 summary = ErrorSummarySchema.model_validate(summary_data)
                 print("-" * 30)
                 print(
@@ -238,7 +216,6 @@ def register_analyze_errors_parser(subparsers):
         dest="analyze_errors_action", required=True
     )
 
-    # --- 'run' subcommand ---
     run_parser = action_subparsers.add_parser(
         "run", help="Run the error analysis pipeline."
     )
@@ -254,8 +231,8 @@ def register_analyze_errors_parser(subparsers):
     run_parser.add_argument(
         "--log-levels",
         type=str,
-        default="ERROR,CRITICAL,FATAL",
-        help="Comma-separated log levels to filter for.",
+        default="ERROR,CRITICAL,FATAL",  # Default error levels
+        help="Comma-separated log levels to filter for (case-insensitive).",
     )
     run_parser.add_argument(
         "--max-initial-errors",
@@ -263,8 +240,13 @@ def register_analyze_errors_parser(subparsers):
         default=5000,
         help="Max error logs to fetch initially for analysis.",
     )
+    run_parser.add_argument(
+        "--max-docs-for-clustering",  # New argument
+        type=int,
+        default=cfg.DEFAULT_MAX_DOCS_FOR_CLUSTERING,
+        help=f"Maximum documents to use for clustering step (default: {cfg.DEFAULT_MAX_DOCS_FOR_CLUSTERING}).",
+    )
 
-    # Clustering params
     run_parser.add_argument(
         "--clustering-method",
         type=str,
@@ -285,7 +267,6 @@ def register_analyze_errors_parser(subparsers):
         help="DBSCAN min_samples parameter.",
     )
 
-    # Sampling params
     run_parser.add_argument(
         "--max-samples-per-cluster",
         type=int,
@@ -301,7 +282,6 @@ def register_analyze_errors_parser(subparsers):
 
     run_parser.set_defaults(func=handle_analyze_errors_run)
 
-    # --- 'list' subcommand ---
     list_parser = action_subparsers.add_parser(
         "list", help="List previously generated error summaries."
     )
