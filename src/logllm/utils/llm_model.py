@@ -3,7 +3,7 @@
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional, Type, Union  # Added Union
+from typing import Any, Dict, List, Optional, Type, Union
 
 # Google Generative AI API
 import google.generativeai as genai
@@ -13,21 +13,14 @@ from google.ai.generativelanguage import (
     Tool,
 )
 from google.ai.generativelanguage import Type as GoogleApiType
-from google.generativeai import types as genai_types  # For EmbedContentResponse hint
+from google.generativeai import types as genai_types
 
 # Pydantic related imports
 from pydantic import BaseModel, Field
 
-# Assuming config has GEMINI_LLM_MODEL and potentially GEMINI_EMBEDDING_MODEL
 from ..config import config as cfg
-
-# Your project's logger and config
 from .logger import Logger
 
-# from pydantic_core import PydanticUndefined # Not used in the provided snippet
-
-
-# Attempt to import Vertex AI tokenizer
 try:
     from vertexai.preview import tokenization
 
@@ -39,8 +32,6 @@ except ImportError:
         "Consider installing google-cloud-aiplatform for this feature."
     )
 
-
-# --- Pydantic to Google API Tool Converter ---
 TYPE_MAP = {
     "string": GoogleApiType.STRING,
     "integer": GoogleApiType.INTEGER,
@@ -90,9 +81,7 @@ def pydantic_to_google_tool(pydantic_model: Type[BaseModel]) -> Tool:
                 type=google_type, description=prop_description, items=items_schema
             )
         else:
-            # This print might be too noisy, consider using logger if available
-            # print(f"Warning: Could not map Pydantic type for property '{name}'. Schema: {prop_schema}")
-            pass  # Warning already logged by calling function or handled by TYPE_UNSPECIFIED
+            pass
     function_declaration = FunctionDeclaration(
         name=pydantic_model.__name__,
         description=model_description,
@@ -105,7 +94,6 @@ def pydantic_to_google_tool(pydantic_model: Type[BaseModel]) -> Tool:
     return Tool(function_declarations=[function_declaration])
 
 
-# --- Rate Limiting Configuration ---
 MODEL_RPM_LIMITS = {
     "gemini-2.5-flash-preview-04-17": 10,
     "gemini-2.5-pro-preview-05-06": 5,
@@ -119,21 +107,30 @@ MODEL_RPM_LIMITS = {
     "gemini-1.5-flash-8b": 15,
     "gemini-1.5-pro": 2,
     "gemini-1.5-pro-latest": 2,
-    # Embedding models (RPMs can vary, add them if known and if rate limiting is applied to them)
-    "models/embedding-001": 1500,  # General RPM for embedding-001
-    "embedding-001": 1500,  # Alias
-    "models/gemini-embedding-exp-03-07": 5,  # From user image
-    "gemini-embedding-exp-03-07": 5,  # Alias
+    "models/text-embedding-004": 1500,
+    "text-embedding-004": 1500,
+    "models/embedding-001": 1500,
+    "embedding-001": 1500,
+    "models/gemini-embedding-exp-03-07": 5,
+    "gemini-embedding-exp-03-07": 5,
     "default": 15,
 }
 
+EMBEDDING_MODEL_TOKEN_LIMITS = {
+    "models/text-embedding-004": 2048,
+    "text-embedding-004": 2048,
+    "models/embedding-001": 2048,  # Common limit, adjust if known otherwise
+    "embedding-001": 2048,
+    "models/gemini-embedding-exp-03-07": 2048,  # Assuming default, adjust if specific limit known
+    "gemini-embedding-exp-03-07": 2048,
+    "default": 2048,  # Default embedding token limit
+}
 
-# --- Base LLM Model Class ---
+
 class LLMModel:
     def __init__(self):
         self._logger = Logger()
         self.model = None
-        # self.embedding = None # Removed, embedding handled by specific methods now
         self.context_size = 0
         self._last_api_call_time: Optional[float] = None
         self.rpm_limit: int = 15
@@ -141,14 +138,11 @@ class LLMModel:
 
     def _wait_for_rate_limit(self, model_rpm: Optional[int] = None):
         current_rpm_limit = model_rpm or self.rpm_limit
-        if current_rpm_limit <= 0:  # No limit or invalid
+        if current_rpm_limit <= 0:
             return
-
         min_interval = 60.0 / current_rpm_limit
-
         if self._last_api_call_time is None:
-            return  # No previous call, no need to wait
-
+            return
         now = time.monotonic()
         time_since_last = now - self._last_api_call_time
         wait_needed = min_interval - time_since_last
@@ -178,33 +172,31 @@ class LLMModel:
         raise NotImplementedError
 
 
-# --- Direct API Gemini Model ---
 class GeminiModel(LLMModel):
     def __init__(self, model_name: str | None = None):
         super().__init__()
         if model_name:
-            self.model_name = (
-                model_name  # Full model path e.g. "models/gemini-1.5-pro-latest"
-            )
+            self.model_name = model_name
         else:
             self.model_name = cfg.GEMINI_LLM_MODEL
 
-        self.api_model_name_key = self.model_name.split("/")[-1]  # For RPM dict lookup
+        self.api_model_name_key = self.model_name.split("/")[-1]
         self.rpm_limit = MODEL_RPM_LIMITS.get(
             self.api_model_name_key, MODEL_RPM_LIMITS["default"]
         )
 
         if self.rpm_limit <= 0:
             self._logger.warning(
-                f"RPM limit for generation model {self.model_name} is zero or invalid. Rate limiting wait may be affected."
+                f"RPM limit for generation model {self.model_name} is zero or invalid."
             )
-            self.min_request_interval = 0  # Effectively disables waiting for generation
+            self.min_request_interval = 0
         else:
             self.min_request_interval = 60.0 / self.rpm_limit
 
-        # Default embedding model
         self.default_embedding_model: str = getattr(
-            cfg, "GEMINI_EMBEDDING_MODEL", "models/embedding-001"
+            cfg,
+            "GEMINI_EMBEDDING_MODEL",
+            "models/text-embedding-004",  # Updated default
         )
         self._logger.info(
             f"Initialized Direct API GeminiModel: {self.model_name} (RPM: {self.rpm_limit}). "
@@ -218,13 +210,10 @@ class GeminiModel(LLMModel):
 
         try:
             genai.configure(api_key=api_key)
-            # For Langchain components that might still look for it
             os.environ["GOOGLE_API_KEY"] = api_key
-
             self.generation_config = genai.GenerationConfig(temperature=1.0)
-            self.safety_settings = {}  # Configure as needed
-
-            self.model = genai.GenerativeModel(  # For text generation
+            self.safety_settings = {}
+            self.model = genai.GenerativeModel(
                 model_name=self.model_name,
                 generation_config=self.generation_config,
                 safety_settings=self.safety_settings,
@@ -234,9 +223,8 @@ class GeminiModel(LLMModel):
             )
             if not VERTEX_TOKENIZER_AVAILABLE:
                 self._logger.warning(
-                    "vertexai.preview.tokenization not available. Local token counting will be skipped."
+                    "vertexai.preview.tokenization not available. Local token counting may be less accurate or slower."
                 )
-
         except Exception as e:
             self._logger.error(
                 f"Error initializing google-generativeai: {e}", exc_info=True
@@ -245,41 +233,127 @@ class GeminiModel(LLMModel):
 
     def token_count(self, prompt: str | None) -> int:
         if prompt is None:
-            self._logger.debug("Token count requested for None prompt, returning 0.")
             return 0
         if VERTEX_TOKENIZER_AVAILABLE:
             try:
+                # User's code had this hardcoded, using it as a general proxy for chunking estimations.
                 tokenizer_model_key = "gemini-1.5-flash-001"
-                self._logger.debug(
-                    f"Attempting local token count with vertexai for model key: {tokenizer_model_key}"
-                )
                 tokenizer = tokenization.get_tokenizer_for_model(tokenizer_model_key)
                 count_response = tokenizer.count_tokens(prompt)
-                self._logger.info(
-                    f"VertexAI token count for '{tokenizer_model_key}': {count_response.total_tokens} tokens."
-                )
                 return count_response.total_tokens
             except Exception as e_vertex:
                 self._logger.warning(
                     f"Local token count with vertexai for '{tokenizer_model_key}' failed: {e_vertex}. Falling back."
                 )
         try:
-            self._logger.debug(
-                f"Attempting API token count with genai for model {self.model_name}"
-            )
-            # self.model is genai.GenerativeModel
+            # Fallback to generative model's count_tokens
             count = self.model.count_tokens(prompt).total_tokens
-            self._logger.info(
-                f"GenAI API token count for '{self.model_name}': {count} tokens."
-            )
             return count
         except Exception as e_genai:
             self._logger.warning(
-                f"API token count with genai failed for {self.model_name}: {e_genai}. Falling back to basic estimate."
+                f"API token count with genai for {self.model_name} failed: {e_genai}. Basic estimate."
             )
-            estimated_tokens = len(prompt.split())
-            self._logger.info(f"Basic estimate token count: {estimated_tokens} tokens.")
-            return estimated_tokens
+            return len(prompt.split())  # Basic fallback
+
+    def _average_embeddings(self, embeddings: List[List[float]]) -> List[float]:
+        if not embeddings:
+            return []
+        if len(embeddings) == 1:
+            return embeddings[0]
+
+        dim = len(embeddings[0])
+        if not all(len(e) == dim for e in embeddings):
+            self._logger.error(
+                "Cannot average embeddings of different dimensions. Returning first embedding."
+            )
+            return embeddings[0]
+
+        avg_embedding = [0.0] * dim
+        for emb_vector in embeddings:
+            for i in range(dim):
+                avg_embedding[i] += emb_vector[i]
+
+        num_embeddings = len(embeddings)
+        for i in range(dim):
+            avg_embedding[i] /= num_embeddings
+        return avg_embedding
+
+    def _split_text_into_chunks(
+        self, text: str, chunk_token_limit: int, chunk_word_overlap: int = 50
+    ) -> List[str]:
+        """
+        Splits text into chunks, each not exceeding chunk_token_limit.
+        Uses self.token_count for estimation. Overlap is in words.
+        """
+        self._logger.debug(
+            f"Attempting to chunk text. Target token limit: {chunk_token_limit}, Word overlap: {chunk_word_overlap}"
+        )
+        words = text.split()  # Simple whitespace split
+        if not words:
+            return []
+
+        # If the whole text is already within limit (considering a small buffer for join characters)
+        # Buffer helps avoid re-tokenizing if original text is just under the limit.
+        if self.token_count(text) < chunk_token_limit - 5:  # 5 is a small buffer
+            return [text]
+
+        all_chunks: List[str] = []
+        current_chunk_words: List[str] = []
+
+        idx = 0
+        while idx < len(words):
+            word_to_add = words[idx]
+
+            # Try adding the word
+            potential_new_chunk_words = current_chunk_words + [word_to_add]
+            potential_new_chunk_str = " ".join(potential_new_chunk_words)
+            estimated_tokens = self.token_count(potential_new_chunk_str)
+
+            if estimated_tokens < chunk_token_limit:
+                current_chunk_words.append(word_to_add)
+                idx += 1
+            else:
+                # Word makes it too long. Finalize the current_chunk_words (if any).
+                if current_chunk_words:
+                    all_chunks.append(" ".join(current_chunk_words))
+
+                    # Determine overlap for the next chunk from the just finalized one.
+                    overlap_start_idx = max(
+                        0, len(current_chunk_words) - chunk_word_overlap
+                    )
+                    new_current_chunk_words = current_chunk_words[overlap_start_idx:]
+
+                    # If the word_to_add itself made current_chunk_words (which was empty) too long
+                    if not all_chunks or " ".join(new_current_chunk_words) != " ".join(
+                        current_chunk_words
+                    ):  # check if it made progress
+                        current_chunk_words = new_current_chunk_words
+                    else:  # single word is too long or overlap is not helping
+                        current_chunk_words = (
+                            []
+                        )  # Reset, word_to_add will start a new chunk or be a chunk itself
+
+                    # If current_chunk_words after overlap processing ALREADY contains word_to_add (because of how idx is handled or if overlap is large)
+                    # we need to ensure word_to_add isn't processed twice or skipped.
+                    # The current word (words[idx]) has not been added to a *finalized* chunk yet.
+                    # It will be the first candidate for the *new* current_chunk_words.
+
+                elif not current_chunk_words:  # First word itself is too long
+                    self._logger.warning(
+                        f"Word '{word_to_add[:50]}...' (tokens: {estimated_tokens}) "
+                        f"alone exceeds limit {chunk_token_limit}. Adding as its own chunk."
+                    )
+                    all_chunks.append(word_to_add)  # Add it as a chunk
+                    current_chunk_words = []  # Reset for next
+                    idx += 1  # Move to next word
+
+            # If at the end, add remaining current_chunk_words
+            if idx == len(words):
+                if current_chunk_words:
+                    all_chunks.append(" ".join(current_chunk_words))
+                break
+
+        return all_chunks if all_chunks else ([text] if text else [])
 
     def generate_embeddings(
         self,
@@ -294,112 +368,167 @@ class GeminiModel(LLMModel):
         embedding_rpm = MODEL_RPM_LIMITS.get(
             embedding_model_key, MODEL_RPM_LIMITS["default"]
         )
-
-        # Apply rate limiting for the embedding model
-        # Note: This uses the same _last_api_call_time as generate().
-        # If generate and embed are called in rapid succession from different threads,
-        # this shared timestamp could lead to contention or slightly off timing.
-        # For highly concurrent scenarios, separate rate limiters might be better.
-        self._wait_for_rate_limit(model_rpm=embedding_rpm)
-
-        num_items = len(contents) if isinstance(contents, list) else 1
-        self._logger.info(
-            f"Generating embeddings with model: {model_to_use} (RPM: {embedding_rpm}) for {num_items} item(s). "
-            f"Task: {task_type}, Title: {'Yes' if title else 'No'}, Dim: {output_dimensionality}."
+        token_limit = EMBEDDING_MODEL_TOKEN_LIMITS.get(
+            embedding_model_key, EMBEDDING_MODEL_TOKEN_LIMITS["default"]
         )
 
-        is_single_string_input = isinstance(contents, str)
-        api_input_content: Union[str, List[str]]
+        self._wait_for_rate_limit(model_rpm=embedding_rpm)
 
-        if is_single_string_input:
-            if not contents:  # type: ignore
-                self._logger.warning(
-                    "Received empty string for embedding. Returning empty list."
+        original_input_list: List[str] = [contents] if isinstance(contents, str) else contents  # type: ignore
+
+        all_texts_for_api: List[str] = []
+        # Stores how many API embeddings correspond to each original input text that was non-empty
+        num_api_embeddings_per_valid_original_text: List[int] = []
+        original_text_was_valid: List[bool] = (
+            []
+        )  # Tracks if original text was non-empty
+
+        for text_item in original_input_list:
+            if (
+                not text_item.strip()
+            ):  # Consider empty or whitespace-only as invalid for embedding
+                original_text_was_valid.append(False)
+                continue  # Will result in an empty list [] for this item in the final output
+
+            original_text_was_valid.append(True)
+            estimated_tokens = self.token_count(text_item)
+
+            if estimated_tokens > token_limit:
+                self._logger.info(
+                    f"Text item (approx {estimated_tokens} tokens) for model '{model_to_use}' "
+                    f"exceeds limit ({token_limit}). Chunking..."
                 )
-                return []
-            api_input_content = contents  # type: ignore
-        else:  # List input
-            if not contents:  # Empty list
-                self._logger.debug(
-                    "Received empty list for embedding. Returning empty list."
+                # A simple overlap could be 10% of chunk_token_limit, converted to words.
+                # For word_overlap_count in _split_text_into_chunks, using a fixed word count for simplicity.
+                # e.g., 50 words overlap. Adjust as needed.
+                chunks = self._split_text_into_chunks(
+                    text_item, token_limit, chunk_word_overlap=30
                 )
-                return []
-            # Filter out empty strings as API requires content with at least 1 character
-            api_input_content = [text for text in contents if text]  # type: ignore
-            if not api_input_content:
-                self._logger.warning(
-                    "All texts in input list were empty after filtering. Returning empty list."
-                )
-                return []
-            if len(api_input_content) < len(contents):  # type: ignore
-                self._logger.info(f"Filtered out {len(contents) - len(api_input_content)} empty strings from batch embedding.")  # type: ignore
+
+                if chunks:
+                    all_texts_for_api.extend(chunks)
+                    num_api_embeddings_per_valid_original_text.append(len(chunks))
+                else:  # Chunking failed to produce anything
+                    self._logger.warning(
+                        f"Chunking returned no result for text: '{text_item[:100]}...'. Sending original (may fail)."
+                    )
+                    all_texts_for_api.append(text_item)
+                    num_api_embeddings_per_valid_original_text.append(1)
+            else:
+                all_texts_for_api.append(text_item)
+                num_api_embeddings_per_valid_original_text.append(1)
+
+        if not all_texts_for_api:
+            self._logger.info(
+                "No non-empty texts to embed after processing and chunking."
+            )
+            return [[] for _ in original_input_list]  # Return list of empty lists
 
         try:
+            self._logger.info(
+                f"Requesting {len(all_texts_for_api)} embeddings from API for model {model_to_use}."
+            )
             response: genai_types.EmbedContentResponse = genai.embed_content(
                 model=model_to_use,
-                content=api_input_content,
-                task_type=task_type,  # type: ignore [arg-type] # SDK handles str for TaskType
+                content=all_texts_for_api,
+                task_type=task_type,  # type: ignore
                 title=title,
                 output_dimensionality=output_dimensionality,
             )
-            self._update_last_call_time()  # Update after successful API call
+            self._update_last_call_time()
+            api_response_embeddings = response["embedding"]  # This is List[List[float]]
 
-            # response['embedding'] is List[float] if api_input_content was str
-            # response['embedding'] is List[List[float]] if api_input_content was List[str]
-            raw_embeddings = response["embedding"]
+            if len(api_response_embeddings) != len(all_texts_for_api):
+                self._logger.error(
+                    f"API returned {len(api_response_embeddings)} embeddings, "
+                    f"but {len(all_texts_for_api)} were expected. Result mapping may be incorrect."
+                )
+                # Attempt to pad or truncate, or raise error. For now, proceed with caution.
+                # This case indicates a significant issue with API response or assumptions.
+                # Fallback: try to construct what we can, or return error state.
+                # For simplicity, if this happens, subsequent averaging may fail or be misaligned.
 
-            if is_single_string_input:
-                if isinstance(raw_embeddings, list) and (
-                    not raw_embeddings or isinstance(raw_embeddings[0], (float, int))
-                ):
-                    return [raw_embeddings]  # Wrap single vector in a list
+            final_results: List[List[float]] = []
+            current_api_emb_idx = 0
+            valid_text_idx = (
+                0  # To iterate through num_api_embeddings_per_valid_original_text
+            )
+
+            for was_valid in original_text_was_valid:
+                if not was_valid:
+                    final_results.append([])  # For original empty/whitespace strings
                 else:
-                    self._logger.error(
-                        f"Unexpected embedding format for single input. Type: {type(raw_embeddings)}"
+                    if valid_text_idx >= len(
+                        num_api_embeddings_per_valid_original_text
+                    ):
+                        self._logger.error(
+                            "Logic error: Ran out of chunk counts for valid texts."
+                        )
+                        final_results.append([])  # Error case
+                        continue
+
+                    num_chunks_for_this_item = (
+                        num_api_embeddings_per_valid_original_text[valid_text_idx]
                     )
-                    raise ValueError(
-                        "Embedding API returned unexpected format for single input."
-                    )
-            else:  # Batch input
-                if isinstance(raw_embeddings, list) and (
-                    not raw_embeddings
-                    or all(isinstance(e, list) for e in raw_embeddings)
-                ):
-                    # If original input list had empty strings filtered, the result matches filtered list length
-                    return raw_embeddings
-                else:
-                    self._logger.error(
-                        f"Unexpected embedding format for batch input. Type: {type(raw_embeddings)}"
-                    )
-                    raise ValueError(
-                        "Embedding API returned unexpected format for batch input."
-                    )
+
+                    if current_api_emb_idx + num_chunks_for_this_item > len(
+                        api_response_embeddings
+                    ):
+                        self._logger.error(
+                            f"Not enough embeddings from API to process item. Needed {num_chunks_for_this_item}, "
+                            f"have {len(api_response_embeddings) - current_api_emb_idx} left. Original text index related to {valid_text_idx}."
+                        )
+                        final_results.append([])  # Error case for this item
+                        # Attempt to advance current_api_emb_idx to prevent infinite loop on next items, though data is lost.
+                        current_api_emb_idx = min(
+                            current_api_emb_idx + num_chunks_for_this_item,
+                            len(api_response_embeddings),
+                        )
+                        valid_text_idx += 1
+                        continue
+
+                    if (
+                        num_chunks_for_this_item == 0
+                    ):  # Should not happen if was_valid is true and it wasn't chunked into nothing
+                        final_results.append([])
+                    elif num_chunks_for_this_item == 1:
+                        final_results.append(
+                            api_response_embeddings[current_api_emb_idx]
+                        )
+                    else:  # Averaging needed
+                        embeddings_to_average = api_response_embeddings[
+                            current_api_emb_idx : current_api_emb_idx
+                            + num_chunks_for_this_item
+                        ]
+                        averaged_embedding = self._average_embeddings(
+                            embeddings_to_average
+                        )
+                        final_results.append(averaged_embedding)
+
+                    current_api_emb_idx += num_chunks_for_this_item
+                    valid_text_idx += 1
+
+            return final_results
 
         except Exception as e:
             self._logger.error(
                 f"Error generating embeddings with model {model_to_use}: {e}",
                 exc_info=True,
             )
-            # Do not update last call time if API call failed
             raise
 
     def generate(self, prompt: str, schema: Optional[Type[BaseModel]] = None):
-        self._wait_for_rate_limit(
-            model_rpm=self.rpm_limit
-        )  # Use generation model's RPM
+        self._wait_for_rate_limit(model_rpm=self.rpm_limit)
         tools = None
         tool_config = None
         if schema:
             try:
                 tools = [pydantic_to_google_tool(schema)]
                 tool_config = {"function_calling_config": {"mode": "ANY"}}
-                self._logger.debug(
-                    f"Attempting structured output with schema: {schema.__name__}"
-                )
+                self._logger.debug(f"Attempting structured output: {schema.__name__}")
             except Exception as e:
                 self._logger.error(
-                    f"Failed to convert Pydantic schema {schema.__name__}: {e}",
-                    exc_info=True,
+                    f"Pydantic schema conversion error: {e}", exc_info=True
                 )
                 self._logger.warning("Proceeding with standard text generation.")
         try:
@@ -407,9 +536,8 @@ class GeminiModel(LLMModel):
                 prompt, tools=tools, tool_config=tool_config
             )
             self._update_last_call_time()
-
             if schema and response.candidates and response.candidates[0].content.parts:
-                function_call_part = next(
+                fc_part = next(
                     (
                         p
                         for p in response.candidates[0].content.parts
@@ -417,177 +545,199 @@ class GeminiModel(LLMModel):
                     ),
                     None,
                 )
-                if function_call_part:
-                    fc = function_call_part.function_call
+                if fc_part:
+                    fc = fc_part.function_call
                     self._logger.debug(f"Model returned function call: {fc.name}")
                     if fc.name != schema.__name__:
                         self._logger.warning(
-                            f"Model called '{fc.name}', expected '{schema.__name__}'. Parsing anyway."
+                            f"Expected '{schema.__name__}', got '{fc.name}'."
                         )
                     try:
                         args_dict = dict(fc.args)
-                        self._logger.debug(f"Extracted args: {args_dict}")
                         return schema.model_validate(args_dict)
                     except Exception as val_err:
                         self._logger.error(
-                            f"Pydantic validation for {schema.__name__} failed: {val_err}",
-                            exc_info=True,
+                            f"Pydantic validation failed: {val_err}", exc_info=True
                         )
-                        self._logger.error(f"Failing args dict: {args_dict if 'args_dict' in locals() else 'not available'}")  # type: ignore
-                        return None  # Validation failed
+                        return None
                 else:
                     self._logger.warning(
-                        f"Schema {schema.__name__} provided, but no function call returned."
+                        f"Schema provided but no function call in response."
                     )
             try:
                 text_content = response.text
-                if not text_content and (not schema or not function_call_part):  # type: ignore
-                    self._logger.warning(
-                        "Response has no text (potentially blocked or empty)."
-                    )
-                    # Log details if available
-                    if hasattr(response, "prompt_feedback"):
-                        self._logger.debug(
-                            f"Prompt feedback: {response.prompt_feedback}"
-                        )
-                    if response.candidates and hasattr(
-                        response.candidates[0], "finish_reason"
-                    ):
-                        self._logger.debug(
-                            f"Finish reason: {response.candidates[0].finish_reason}"
-                        )
+                if not text_content and (not schema or not fc_part):  # type: ignore
+                    self._logger.warning("Response empty/blocked.")
                     return None
                 return text_content
-            except ValueError:  # .text raises ValueError if blocked
+            except ValueError:
                 self._logger.warning("Response blocked (ValueError accessing .text).")
-                if hasattr(response, "prompt_feedback"):
-                    self._logger.debug(f"Prompt feedback: {response.prompt_feedback}")
-                if response.candidates:
-                    self._logger.debug(
-                        f"Finish reason: {response.candidates[0].finish_reason}"
-                    )
-                    self._logger.debug(
-                        f"Safety Ratings: {response.candidates[0].safety_ratings}"
-                    )
                 return None
             except Exception as text_err:
-                self._logger.error(
-                    f"Error extracting text from response: {text_err}", exc_info=True
-                )
+                self._logger.error(f"Error extracting text: {text_err}", exc_info=True)
                 return None
         except Exception as e:
-            self._logger.error(f"Error during Gemini API call: {e}", exc_info=True)
+            self._logger.error(f"Gemini API call error: {e}", exc_info=True)
             raise
 
 
-# --- Example Usage ---
 def main():
-    class MockConfig:  # Simple mock for standalone testing
+    class MockConfig:
         LOGGER_NAME = "test_llm_direct"
         LOG_FILE = "test_llm_direct.log"
-        GEMINI_LLM_MODEL = "models/gemini-1.5-flash-latest"  # Or "gemini-1.5-flash-001"
-        GEMINI_EMBEDDING_MODEL = "models/embedding-001"  # Default embedding model
-        # GEMINI_EMBEDDING_MODEL = "models/gemini-embedding-exp-03-07" # For testing experimental
+        GEMINI_LLM_MODEL = "models/gemini-1.5-flash-latest"
+        GEMINI_EMBEDDING_MODEL = (
+            "models/text-embedding-004"  # Uses a model with known limits
+        )
 
     global cfg
     cfg = MockConfig()  # type: ignore
-
-    logger = Logger()  # Initialize logger early
+    logger = Logger()
 
     if "GENAI_API_KEY" not in os.environ:
-        logger.error(
-            "GENAI_API_KEY environment variable not set. Please set it to run the example."
-        )
+        logger.error("GENAI_API_KEY environment variable not set.")
         exit(1)
 
-    class TestSchemaDirect(BaseModel):
-        numbers_list: List[int] = Field(
-            ..., description="A list of 5 different integers."
-        )
-        comment: Optional[str] = Field(None, description="An optional comment.")
+    gemini_model = GeminiModel()
 
-    test_prompt = "Generate a list of 5 distinct integers. Add a short comment."
-    texts_to_embed_single = "Hello world, this is a test document."
-    texts_to_embed_batch = [
-        "The quick brown fox jumps over the lazy dog.",
-        "Gemini is a family of generative AI models.",
-        "",  # Test empty string in batch
-        "This is the third document for embedding.",
+    long_text_parts = [
+        "This is the first part of a very long story that needs to be chunked for embedding. It talks about many things, including coding, AI, and the future.",
+        "The story continues, describing adventures in digital realms and the challenges of creating intelligent systems. It has to be long enough to trigger chunking.",
+        "More details are added, with complex characters and intricate plots unfolding. Each sentence adds to the token count, pushing it towards the limit.",
+        "And yet more text to ensure it's quite long. We need several hundred words at least. Let's repeat some phrases for good measure. The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.",
+        "The tale goes on, with more and more details, pushing the boundaries of the embedding model's capacity for a single input. This should definitely be over 200-300 tokens.",
+        "Final segment to make it very long indeed. The goal is to test the chunking mechanism and ensure that the embeddings are still produced and averaged correctly.",
+        "This is the first part of a very long story that needs to be chunked for embedding. It talks about many things, including coding, AI, and the future.",
+        "The story continues, describing adventures in digital realms and the challenges of creating intelligent systems. It has to be long enough to trigger chunking.",
+        "More details are added, with complex characters and intricate plots unfolding. Each sentence adds to the token count, pushing it towards the limit.",
+        "And yet more text to ensure it's quite long. We need several hundred words at least. Let's repeat some phrases for good measure. The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.",
+        "The tale goes on, with more and more details, pushing the boundaries of the embedding model's capacity for a single input. This should definitely be over 200-300 tokens.",
+        "Final segment to make it very long indeed. The goal is to test the chunking mechanism and ensure that the embeddings are still produced and averaged correctly.",
+        "This is the first part of a very long story that needs to be chunked for embedding. It talks about many things, including coding, AI, and the future.",
+        "The story continues, describing adventures in digital realms and the challenges of creating intelligent systems. It has to be long enough to trigger chunking.",
+        "More details are added, with complex characters and intricate plots unfolding. Each sentence adds to the token count, pushing it towards the limit.",
+        "And yet more text to ensure it's quite long. We need several hundred words at least. Let's repeat some phrases for good measure. The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.",
+        "The tale goes on, with more and more details, pushing the boundaries of the embedding model's capacity for a single input. This should definitely be over 200-300 tokens.",
+        "Final segment to make it very long indeed. The goal is to test the chunking mechanism and ensure that the embeddings are still produced and averaged correctly.",
+        "This is the first part of a very long story that needs to be chunked for embedding. It talks about many things, including coding, AI, and the future.",
+        "The story continues, describing adventures in digital realms and the challenges of creating intelligent systems. It has to be long enough to trigger chunking.",
+        "More details are added, with complex characters and intricate plots unfolding. Each sentence adds to the token count, pushing it towards the limit.",
+        "And yet more text to ensure it's quite long. We need several hundred words at least. Let's repeat some phrases for good measure. The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.",
+        "The tale goes on, with more and more details, pushing the boundaries of the embedding model's capacity for a single input. This should definitely be over 200-300 tokens.",
+        "Final segment to make it very long indeed. The goal is to test the chunking mechanism and ensure that the embeddings are still produced and averaged correctly.",
+        "This is the first part of a very long story that needs to be chunked for embedding. It talks about many things, including coding, AI, and the future.",
+        "This is the first part of a very long story that needs to be chunked for embedding. It talks about many things, including coding, AI, and the future.",
+        "The story continues, describing adventures in digital realms and the challenges of creating intelligent systems. It has to be long enough to trigger chunking.",
+        "More details are added, with complex characters and intricate plots unfolding. Each sentence adds to the token count, pushing it towards the limit.",
+        "And yet more text to ensure it's quite long. We need several hundred words at least. Let's repeat some phrases for good measure. The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.",
+        "The tale goes on, with more and more details, pushing the boundaries of the embedding model's capacity for a single input. This should definitely be over 200-300 tokens.",
+        "Final segment to make it very long indeed. The goal is to test the chunking mechanism and ensure that the embeddings are still produced and averaged correctly.",
+        "This is the first part of a very long story that needs to be chunked for embedding. It talks about many things, including coding, AI, and the future.",
+        "The story continues, describing adventures in digital realms and the challenges of creating intelligent systems. It has to be long enough to trigger chunking.",
+        "More details are added, with complex characters and intricate plots unfolding. Each sentence adds to the token count, pushing it towards the limit.",
+        "And yet more text to ensure it's quite long. We need several hundred words at least. Let's repeat some phrases for good measure. The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.",
+        "The tale goes on, with more and more details, pushing the boundaries of the embedding model's capacity for a single input. This should definitely be over 200-300 tokens.",
+        "Final segment to make it very long indeed. The goal is to test the chunking mechanism and ensure that the embeddings are still produced and averaged correctly.",
+        "This is the first part of a very long story that needs to be chunked for embedding. It talks about many things, including coding, AI, and the future.",
+        "The story continues, describing adventures in digital realms and the challenges of creating intelligent systems. It has to be long enough to trigger chunking.",
+        "More details are added, with complex characters and intricate plots unfolding. Each sentence adds to the token count, pushing it towards the limit.",
+        "And yet more text to ensure it's quite long. We need several hundred words at least. Let's repeat some phrases for good measure. The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.",
+        "The tale goes on, with more and more details, pushing the boundaries of the embedding model's capacity for a single input. This should definitely be over 200-300 tokens.",
+        "Final segment to make it very long indeed. The goal is to test the chunking mechanism and ensure that the embeddings are still produced and averaged correctly.",
+        "This is the first part of a very long story that needs to be chunked for embedding. It talks about many things, including coding, AI, and the future.",
+        "The story continues, describing adventures in digital realms and the challenges of creating intelligent systems. It has to be long enough to trigger chunking.",
+        "More details are added, with complex characters and intricate plots unfolding. Each sentence adds to the token count, pushing it towards the limit.",
+        "And yet more text to ensure it's quite long. We need several hundred words at least. Let's repeat some phrases for good measure. The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.",
+        "The tale goes on, with more and more details, pushing the boundaries of the embedding model's capacity for a single input. This should definitely be over 200-300 tokens.",
+        "Final segment to make it very long indeed. The goal is to test the chunking mechanism and ensure that the embeddings are still produced and averaged correctly.",
+        "This is the first part of a very long story that needs to be chunked for embedding. It talks about many things, including coding, AI, and the future.",
+        "The story continues, describing adventures in digital realms and the challenges of creating intelligent systems. It has to be long enough to trigger chunking.",
+        "More details are added, with complex characters and intricate plots unfolding. Each sentence adds to the token count, pushing it towards the limit.",
+        "And yet more text to ensure it's quite long. We need several hundred words at least. Let's repeat some phrases for good measure. The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.",
+        "The tale goes on, with more and more details, pushing the boundaries of the embedding model's capacity for a single input. This should definitely be over 200-300 tokens.",
+        "Final segment to make it very long indeed. The goal is to test the chunking mechanism and ensure that the embeddings are still produced and averaged correctly.",
+        "This is the first part of a very long story that needs to be chunked for embedding. It talks about many things, including coding, AI, and the future.",
+        "The story continues, describing adventures in digital realms and the challenges of creating intelligent systems. It has to be long enough to trigger chunking.",
+        "More details are added, with complex characters and intricate plots unfolding. Each sentence adds to the token count, pushing it towards the limit.",
+        "And yet more text to ensure it's quite long. We need several hundred words at least. Let's repeat some phrases for good measure. The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.",
+        "The tale goes on, with more and more details, pushing the boundaries of the embedding model's capacity for a single input. This should definitely be over 200-300 tokens.",
+        "Final segment to make it very long indeed. The goal is to test the chunking mechanism and ensure that the embeddings are still produced and averaged correctly.",
+        "This is the first part of a very long story that needs to be chunked for embedding. It talks about many things, including coding, AI, and the future.",
+        "The story continues, describing adventures in digital realms and the challenges of creating intelligent systems. It has to be long enough to trigger chunking.",
+        "More details are added, with complex characters and intricate plots unfolding. Each sentence adds to the token count, pushing it towards the limit.",
+        "And yet more text to ensure it's quite long. We need several hundred words at least. Let's repeat some phrases for good measure. The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.",
+        "The tale goes on, with more and more details, pushing the boundaries of the embedding model's capacity for a single input. This should definitely be over 200-300 tokens.",
+        "Final segment to make it very long indeed. The goal is to test the chunking mechanism and ensure that the embeddings are still produced and averaged correctly.",
+        "This is the first part of a very long story that needs to be chunked for embedding. It talks about many things, including coding, AI, and the future.",
+        "The story continues, describing adventures in digital realms and the challenges of creating intelligent systems. It has to be long enough to trigger chunking.",
+        "More details are added, with complex characters and intricate plots unfolding. Each sentence adds to the token count, pushing it towards the limit.",
+        "And yet more text to ensure it's quite long. We need several hundred words at least. Let's repeat some phrases for good measure. The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.",
+        "The tale goes on, with more and more details, pushing the boundaries of the embedding model's capacity for a single input. This should definitely be over 200-300 tokens.",
+        "Final segment to make it very long indeed. The goal is to test the chunking mechanism and ensure that the embeddings are still produced and averaged correctly.",
+        "This is the first part of a very long story that needs to be chunked for embedding. It talks about many things, including coding, AI, and the future.",
+        "The story continues, describing adventures in digital realms and the challenges of creating intelligent systems. It has to be long enough to trigger chunking.",
+        "More details are added, with complex characters and intricate plots unfolding. Each sentence adds to the token count, pushing it towards the limit.",
+        "And yet more text to ensure it's quite long. We need several hundred words at least. Let's repeat some phrases for good measure. The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.",
+        "The tale goes on, with more and more details, pushing the boundaries of the embedding model's capacity for a single input. This should definitely be over 200-300 tokens.",
+        "Final segment to make it very long indeed. The goal is to test the chunking mechanism and ensure that the embeddings are still produced and averaged correctly.",
+        "This is the first part of a very long story that needs to be chunked for embedding. It talks about many things, including coding, AI, and the future.",
+        "The story continues, describing adventures in digital realms and the challenges of creating intelligent systems. It has to be long enough to trigger chunking.",
+        "More details are added, with complex characters and intricate plots unfolding. Each sentence adds to the token count, pushing it towards the limit.",
+        "And yet more text to ensure it's quite long. We need several hundred words at least. Let's repeat some phrases for good measure. The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.",
+        "The tale goes on, with more and more details, pushing the boundaries of the embedding model's capacity for a single input. This should definitely be over 200-300 tokens.",
+        "Final segment to make it very long indeed. The goal is to test the chunking mechanism and ensure that the embeddings are still produced and averaged correctly.",
+        "The story continues, describing adventures in digital realms and the challenges of creating intelligent systems. It has to be long enough to trigger chunking.",
+        "More details are added, with complex characters and intricate plots unfolding. Each sentence adds to the token count, pushing it towards the limit.",
+        "And yet more text to ensure it's quite long. We need several hundred words at least. Let's repeat some phrases for good measure. The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.",
+        "The tale goes on, with more and more details, pushing the boundaries of the embedding model's capacity for a single input. This should definitely be over 200-300 tokens.",
+        "Final segment to make it very long indeed. The goal is to test the chunking mechanism and ensure that the embeddings are still produced and averaged correctly.",
     ]
+    very_long_text = " ".join(long_text_parts) * 3  # Make it quite long
+
+    short_text1 = "This is a short text."
+    short_text2 = "Another brief document."
+    empty_text = ""
+
+    texts_to_embed_batch = [short_text1, very_long_text, short_text2, empty_text]
+
+    logger.info(
+        f"Token count for very_long_text (approx using gen model tokenizer): {gemini_model.token_count(very_long_text)}"
+    )
 
     try:
-        logger.info("Initializing Direct API GeminiModel...")
-        gemini_model = GeminiModel()  # Uses GEMINI_LLM_MODEL from cfg
-
-        # --- Test Token Count ---
-        logger.info("\n--- Testing token count ---")
-        count = gemini_model.token_count(test_prompt)
-        logger.info(f"Token count for prompt ('{test_prompt[:30]}...'): {count}")
-
-        # --- Test Standard Generation ---
-        logger.info("\n--- Testing standard generation ---")
-        standard_response = gemini_model.generate(test_prompt)
-        logger.info(f"Standard Response: {standard_response}")
-
-        # --- Test Structured Generation ---
-        logger.info("\n--- Testing structured generation ---")
-        structured_response = gemini_model.generate(
-            test_prompt, schema=TestSchemaDirect
-        )
-        logger.info(f"Structured Response: {structured_response}")
-        if isinstance(structured_response, TestSchemaDirect):
-            logger.info(
-                f"Parsed list: {structured_response.numbers_list}, Comment: {structured_response.comment}"
-            )
-
-        # --- Test Embeddings ---
-        logger.info("\n--- Testing embeddings ---")
-
-        # Single document embedding
-        logger.info(
-            f"Embedding single document with default model ('{gemini_model.default_embedding_model}')..."
-        )
-        single_embedding_result = gemini_model.generate_embeddings(
-            texts_to_embed_single
-        )
-        if single_embedding_result:
-            logger.info(
-                f"Single embedding vector dimension: {len(single_embedding_result[0])}"
-            )
-            # logger.info(f"Single embedding vector (first 5 dims): {single_embedding_result[0][:5]}")
-        else:
-            logger.warning("Single embedding result was empty.")
-
-        # Batch document embedding with a specific task type
-        logger.info(f"Embedding batch documents with task 'RETRIEVAL_DOCUMENT'...")
+        logger.info("\n--- Testing embeddings with chunking ---")
         batch_embedding_result = gemini_model.generate_embeddings(
-            texts_to_embed_batch,
-            task_type="RETRIEVAL_DOCUMENT",  # Example task type
-            # title="Sample Batch Documents" # Example title
-            # embedding_model_name="models/gemini-embedding-exp-03-07" # Example override
+            texts_to_embed_batch, task_type="RETRIEVAL_DOCUMENT"
         )
         if batch_embedding_result:
             logger.info(
-                f"Batch embeddings generated for {len(batch_embedding_result)} documents."
+                f"Batch embeddings generated. Results count: {len(batch_embedding_result)}"
             )
-            for i, emb in enumerate(batch_embedding_result):
-                logger.info(f"  Doc {i} vector dimension: {len(emb)}")
+            for i, emb_list in enumerate(batch_embedding_result):
+                original_text_preview = (
+                    texts_to_embed_batch[i][:50].replace("\n", " ") + "..."
+                    if texts_to_embed_batch[i]
+                    else "[EMPTY STRING]"
+                )
+                if emb_list:  # Non-empty list of floats
+                    logger.info(
+                        f"  Original text {i} ('{original_text_preview}'): Embedding dim {len(emb_list)}"
+                    )
+                else:  # Empty list, means original was empty or error
+                    logger.info(
+                        f"  Original text {i} ('{original_text_preview}'): No embedding generated (empty list)."
+                    )
         else:
-            logger.warning("Batch embedding result was empty.")
+            logger.warning("Batch embedding result was None or empty list itself.")
 
-        # Test embedding an empty string
-        logger.info("Embedding empty string (should return empty list)...")
-        empty_string_emb = gemini_model.generate_embeddings("")
-        logger.info(f"Embedding for empty string: {empty_string_emb} (Expected: [])")
-
-        # Test embedding list with only empty string
-        logger.info(
-            "Embedding list with only empty string (should return empty list)..."
-        )
-        empty_list_emb = gemini_model.generate_embeddings([""])
-        logger.info(
-            f"Embedding for list with empty string: {empty_list_emb} (Expected: [])"
-        )
+        logger.info("\n--- Testing single long text embedding ---")
+        single_long_embedding = gemini_model.generate_embeddings(very_long_text)
+        if single_long_embedding and single_long_embedding[0]:
+            logger.info(
+                f"Single long text embedding dim: {len(single_long_embedding[0])}"
+            )
+        else:
+            logger.warning("Single long text embedding failed or returned empty.")
 
     except Exception as e:
         logger.error(f"\nAn error occurred in main: {e}", exc_info=True)
