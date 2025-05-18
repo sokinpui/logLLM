@@ -83,7 +83,7 @@ def pydantic_to_google_tool(pydantic_model: Type[BaseModel]) -> Tool:
                     description=items_prop_schema.get("description", ""),
                 )
             else:
-                pass
+                pass  # Could not map items type
 
         if google_type != GoogleApiType.TYPE_UNSPECIFIED:
             google_properties[name] = Schema(
@@ -106,19 +106,17 @@ def pydantic_to_google_tool(pydantic_model: Type[BaseModel]) -> Tool:
     return Tool(function_declarations=[function_declaration])
 
 
-# --- Rate Limiting Configuration ---
+# --- Rate Limiting Configuration  ---
 MODEL_RPM_LIMITS = {
-    "gemini-2.5-flash-preview-04-1": 10,
-    "gemini-2.5-pro-experimental": 5,
+    "gemini-2.5-flash-preview-04-17": 10,
     "gemini-2.0-flash": 15,
+    "gemini-2.0-flash-preview-image-generation": 10,
     "gemini-2.0-flash-experimental": 10,
     "gemini-2.0-flash-lite": 30,
-    "gemini-2.0-flash-thinking-experimental-01-21": 10,
-    "gemini-1.5-flash": 15,  # Keep updated based on actual limits
-    "gemini-1.5-flash-latest": 15,  # Assuming same as 1.5 flash
+    "gemini-1.5-flash": 15,
+    "gemini-1.5-flash-latest": 15,
     "gemini-1.5-flash-8b": 15,
     "gemini-1.5-pro": 2,
-    "gemma-3": 30,
     "default": 15,
 }
 
@@ -323,7 +321,7 @@ class GeminiModel(LLMModel):
                 text_content = response.text
                 # Check if text is empty even if no error occurred (e.g., safety blocking with no text)
                 if not text_content and (
-                    not schema or not function_call_part
+                    not schema or not function_call_part  # type: ignore
                 ):  # Avoid false positive if struct output failed validation but text is empty
                     self._logger.warning(
                         "Response contained no text content (potentially blocked or empty generation)."
@@ -400,6 +398,8 @@ def main():
     try:
         print("Initializing Direct API GeminiModel...")
         logger = Logger()  # Ensure logger is initialized if needed globally
+        # Example: Override model name from config if needed for testing
+        # gemini_model = GeminiModel(model_name="models/gemini-1.5-pro-latest")
         gemini_model = GeminiModel()
 
         print("\nTesting standard generation (Direct API):")
@@ -417,8 +417,8 @@ def main():
 
         if isinstance(structured_response, TestSchemaDirect):
             print("Successfully parsed into TestSchemaDirect object.")
-            print(f"Generated list: {structured_response.numbers_list}")
-            print(f"Comment: {structured_response.comment}")
+            print(f"Generated list: {structured_response.numbers_list}")  # type: ignore
+            print(f"Comment: {structured_response.comment}")  # type: ignore
         elif structured_response is None:
             print(
                 "Structured response was None. Check logs for errors (API, validation, or blocking)."
@@ -434,8 +434,9 @@ def main():
 
     except Exception as e:
         print(f"\nAn error occurred: {e}")
-        gemini_model = GeminiModel()
-        print(gemini_model.generate(test_prompt))
+        # Re-initialize to show it would use a default from config if not passed
+        gemini_model_fallback = GeminiModel()  # type: ignore
+        print(gemini_model_fallback.generate(test_prompt))  # type: ignore
         import traceback
 
         traceback.print_exc()
