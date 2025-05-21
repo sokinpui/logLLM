@@ -1,35 +1,35 @@
 # src/logllm/cli/container.py
 import argparse
 import time
-import subprocess  # Ensure subprocess is imported
+
+from logllm.config import config as cfg
 
 # Use absolute imports
 from logllm.utils.container_manager import DockerManager
-from logllm.config import config as cfg
 from logllm.utils.logger import Logger
+
+# import subprocess # No longer needed for Colima stop
+
 
 logger = Logger()
 
 
 # --- Handler for 'start' ---
 def handle_container_start(args):
-    logger.info(f"Executing container start... Requested memory: {args.memory}GB")
+    # logger.info(f"Executing container start... Requested memory: {args.memory}GB") # Memory arg removed
+    logger.info(f"Executing container start...")
     manager = DockerManager()
 
-    # --- STEP 1: Explicitly ensure client and start daemon if needed ---
-    # Call _ensure_client FIRST, passing the memory argument.
-    # This guarantees that if Colima needs starting, it uses the CLI value.
     logger.info("Initializing Docker client and checking daemon status...")
-    if not manager._ensure_client(memory_gb=args.memory):
+    if not manager._ensure_client():  # memory_gb argument removed
         print(
-            "ERROR: Failed to initialize Docker client or start daemon. Aborting start."
+            "ERROR: Failed to initialize Docker client. Please ensure Docker daemon is running. Aborting start."
         )
         logger.error(
             "Aborting container start due to Docker client initialization failure."
         )
         return
     logger.info("Docker client initialized successfully.")
-    # --- END STEP 1 ---
 
     # --- Start Elasticsearch ---
     logger.info("--- Starting Elasticsearch Container ---")
@@ -41,7 +41,6 @@ def handle_container_start(args):
     elastic_search_env_vars = cfg.ELASTIC_SEARCH_ENVIRONMENT
     elastic_container_name = cfg.ELASTIC_SEARCH_CONTAINER_NAME
 
-    # These calls will now use the already initialized client.
     logger.info("Ensuring Docker network exists...")
     manager._create_network(elastic_search_network)
     logger.info("Ensuring Docker volume exists...")
@@ -50,9 +49,6 @@ def handle_container_start(args):
     manager._pull_image(elastic_search_image)
 
     logger.info(f"Starting container {elastic_container_name}...")
-    # We still pass memory_gb here, although it won't re-trigger daemon start,
-    # it's harmless and keeps the signature consistent if start_container
-    # itself ever needed the value directly.
     es_id = manager.start_container(
         name=elastic_container_name,
         image=elastic_search_image,
@@ -62,7 +58,7 @@ def handle_container_start(args):
         env_vars=elastic_search_env_vars,
         detach=cfg.DOCKER_DETACH,
         remove=cfg.DOCKER_REMOVE,
-        memory_gb=args.memory,  # Pass memory argument
+        # memory_gb=args.memory, # Removed
     )
     if es_id:
         print(
@@ -81,22 +77,19 @@ def handle_container_start(args):
     kibana_env_vars = cfg.KIBANA_ENVIRONMENT
     kibana_container_name = cfg.KIBANA_CONTAINER_NAME
 
-    # Uses existing client
     logger.info("Ensuring Kibana image exists...")
     manager._pull_image(kibana_image)
 
     logger.info(f"Starting container {kibana_container_name}...")
-    # No need to pass memory_gb here as daemon is already handled
     kbn_id = manager.start_container(
         name=kibana_container_name,
         image=kibana_image,
         network=kibana_network,
-        volume_setup={},
+        volume_setup={},  # Kibana usually doesn't need a persistent volume like ES
         ports=kibana_ports,
         env_vars=kibana_env_vars,
         detach=cfg.DOCKER_DETACH,
         remove=cfg.DOCKER_REMOVE,
-        # memory_gb not needed here
     )
     if kbn_id:
         print(
@@ -111,11 +104,10 @@ def handle_container_start(args):
     print("\nContainer start process initiated. Use 'status' command to check.")
 
 
-# --- handle_container_stop (Modified as per previous answer) ---
+# --- handle_container_stop ---
 def handle_container_stop(args):
-    logger.info(
-        f"Executing container stop... Remove: {args.remove}, Stop Colima: {args.stop_colima}"
-    )
+    # logger.info(f"Executing container stop... Remove: {args.remove}, Stop Colima: {args.stop_colima}") # Stop Colima removed
+    logger.info(f"Executing container stop... Remove: {args.remove}")
     manager = DockerManager()
     es_name = cfg.ELASTIC_SEARCH_CONTAINER_NAME
     kbn_name = cfg.KIBANA_CONTAINER_NAME
@@ -128,44 +120,16 @@ def handle_container_stop(args):
     if args.remove:
         print("---")
         print(f"Removing container '{kbn_name}'...")
-        kbn_removed = manager.remove_container(kbn_name)
+        kbn_removed = manager.remove_container(
+            kbn_name
+        )  # kbn_removed not used, but fine
         print(f"Removing container '{es_name}'...")
-        es_removed = manager.remove_container(es_name)
-
-    if args.stop_colima:
-        print("---")
-        print("Stopping Colima VM...")
-        logger.info("Attempting to stop Colima VM...")
-        try:
-            status_res = subprocess.run(
-                ["colima", "status"], capture_output=True, text=True, check=False
-            )
-            if "Running" in status_res.stdout:
-                stop_res = subprocess.run(
-                    ["colima", "stop"], check=True, capture_output=True, text=True
-                )
-                print("Colima VM stopped successfully.")
-                logger.info("Colima VM stopped successfully.")
-                logger.debug(
-                    f"Colima stop output:\n{stop_res.stdout}\n{stop_res.stderr}"
-                )
-            else:
-                print("Colima VM is already stopped.")
-                logger.info("Colima VM was not running.")
-        except FileNotFoundError:
-            print("Error: 'colima' command not found. Cannot stop Colima.")
-            logger.error("Colima command not found during stop.")
-        except subprocess.CalledProcessError as cpe:
-            print(f"Error stopping Colima VM: {cpe}")
-            logger.error(f"Error executing colima stop: {cpe}\nstderr:\n{cpe.stderr}")
-        except Exception as e:
-            print(f"An unexpected error occurred while stopping Colima: {e}")
-            logger.error(f"Unexpected error stopping Colima: {e}", exc_info=True)
+        es_removed = manager.remove_container(es_name)  # es_removed not used, but fine
 
     if args.remove:
-        print("\nStop, Remove (and potentially Colima Stop) process finished.")
+        print("\nStop and Remove process finished.")
     else:
-        print("\nStop (and potentially Colima Stop) process finished.")
+        print("\nStop process finished.")
     logger.info(
         f"Container stop finished. ES Stopped: {es_stopped}, KBN Stopped: {kbn_stopped}"
     )
@@ -187,38 +151,36 @@ def handle_container_status(args):
     logger.info(f"Container status check complete. ES: {es_status}, KBN: {kbn_status}")
 
 
-# --- handle_container_restart (Modified to ensure correct memory passing) ---
+# --- handle_container_restart ---
 def handle_container_restart(args):
-    logger.info(f"Executing container restart... Requested memory: {args.memory}GB")
+    # logger.info(f"Executing container restart... Requested memory: {args.memory}GB") # Memory arg removed
+    logger.info(f"Executing container restart...")
     print("--- Restarting Containers ---")
 
-    # 1. Stop Containers (pass stop-colima based on args? Or always keep colima running on restart?)
-    # Let's assume restart keeps Colima running unless explicitly stopped separately.
     stop_args = argparse.Namespace(
-        remove=False, stop_colima=False
-    )  # Don't stop colima during restart by default
+        remove=False  # Stop Colima option removed from Namespace
+    )
     handle_container_stop(stop_args)
 
-    # Optional: Wait a moment
     print("Waiting a few seconds before starting...")
     time.sleep(5)
 
-    # 2. Start Containers (pass memory from restart args)
-    # The explicit _ensure_client call in handle_container_start will now correctly
-    # use the memory value if Colima had been stopped previously.
-    start_args = argparse.Namespace(memory=args.memory)
+    # start_args = argparse.Namespace(memory=args.memory) # Memory arg removed
+    start_args = (
+        argparse.Namespace()
+    )  # No specific args needed for start from restart context now
     handle_container_start(start_args)
 
     print("\n--- Restart process finished ---")
     logger.info("Container restart finished.")
 
 
-# --- Register Parser Function (Modified as per previous answer with --stop-colima) ---
+# --- Register Parser Function ---
 def register_container_parser(subparsers):
     container_parser = subparsers.add_parser(
         "db",
-        help="Manage database engine in Docker containers (Elasticsearch, Kibana) via Colima(MacOS)/Docker(Linux) daemon",
-        description="Start, stop, restart, or check the status of the necessary Docker containers.",
+        help="Manage database engine in Docker containers (Elasticsearch, Kibana). User must ensure Docker daemon is running.",
+        description="Start, stop, restart, or check the status of the necessary Docker containers. Assumes Docker daemon is already running and accessible.",
     )
     container_subparsers = container_parser.add_subparsers(
         dest="container_action", help="Container actions", required=True
@@ -226,14 +188,8 @@ def register_container_parser(subparsers):
 
     # Start command
     start_parser = container_subparsers.add_parser(
-        "start", help="Start Elasticsearch and Kibana containers"
-    )
-    start_parser.add_argument(
-        "-m",
-        "--memory",
-        type=int,
-        default=cfg.COLIMA_MEMORY_SIZE,
-        help=f"Memory (GB) for Colima VM if starting (default: {cfg.COLIMA_MEMORY_SIZE}GB).",
+        "start",
+        help="Start Elasticsearch and Kibana containers. Requires Docker daemon to be running.",
     )
     start_parser.set_defaults(func=handle_container_start)
 
@@ -246,11 +202,6 @@ def register_container_parser(subparsers):
         action="store_true",
         help="Also remove the containers after stopping them.",
     )
-    stop_parser.add_argument(  # Added flag
-        "--stop-colima",
-        action="store_true",
-        help="Also stop the Colima virtual machine after stopping containers.",
-    )
     stop_parser.set_defaults(func=handle_container_stop)
 
     # Status command
@@ -261,13 +212,7 @@ def register_container_parser(subparsers):
 
     # Restart command
     restart_parser = container_subparsers.add_parser(
-        "restart", help="Stop and then start containers"
-    )
-    restart_parser.add_argument(
-        "-m",
-        "--memory",
-        type=int,
-        default=cfg.COLIMA_MEMORY_SIZE,
-        help=f"Memory (GB) for Colima VM if it needs starting during restart (default: {cfg.COLIMA_MEMORY_SIZE}GB).",
+        "restart",
+        help="Stop and then start containers. Requires Docker daemon to be running.",
     )
     restart_parser.set_defaults(func=handle_container_restart)

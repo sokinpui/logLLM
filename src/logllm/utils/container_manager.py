@@ -1,15 +1,15 @@
 # src/logllm/utils/container_manager.py
 
-from abc import ABC, abstractmethod
+import os
 import platform
 import subprocess
-import os
-import docker
-from docker.errors import NotFound, APIError
+from abc import ABC, abstractmethod
 from typing import Optional  # Added Optional
 
+import docker
+from docker.errors import APIError, NotFound
+
 from .logger import Logger
-from ..config import config as cfg
 
 
 class ContainerManager(ABC):
@@ -22,14 +22,13 @@ class ContainerManager(ABC):
 class DockerManager(ContainerManager):
     def __init__(self):
         self._logger = Logger()
-        # Start daemon moved to specific actions needing it
         self._client: Optional[docker.client.DockerClient] = None
-        self.id = None
+        self.id = None  # This attribute 'id' is initialized but not used. Consider removing if truly unused.
 
-    def _ensure_client(self, memory_gb: Optional[int] = None) -> bool:
-        """Initializes the Docker client if not already done."""
+    def _ensure_client(self) -> bool:
+        """Initializes the Docker client if not already done by attempting to connect to a running daemon."""
         if self._client is None:
-            self._client = self._start_daemon(memory_gb=memory_gb)  # Pass memory here
+            self._client = self._start_daemon()
         return self._client is not None
 
     def start_container(
@@ -42,19 +41,22 @@ class DockerManager(ContainerManager):
         env_vars: dict,
         detach: bool,
         remove: bool,
-        memory_gb: int = 4,  # Added memory for daemon start
-    ) -> Optional[str]:  # Return type hint
-        # Ensure Docker client is initialized (and potentially Colima started)
-        if not self._ensure_client(memory_gb=memory_gb):
+        # memory_gb: int = 4, # Removed memory_gb as it was for Colima
+    ) -> Optional[str]:
+        # Ensure Docker client is initialized
+        if not self._ensure_client():  # Removed memory_gb from call
             self._logger.error(
                 "Failed to initialize Docker client. Cannot start container."
             )
             return None
 
-        self._remove_container_if_exists(name)  # Changed method name for clarity
+        self._remove_container_if_exists(name)
 
         try:
             self._logger.info(f"Attempting to run container '{name}'...")
+            # If you need to set memory limits for the container itself, use mem_limit parameter:
+            # e.g., mem_limit=f"{memory_gb}g" if memory_gb was for the container.
+            # For now, assuming it was for Colima and thus removed.
             container = self._client.containers.run(
                 name=name,
                 image=image,
@@ -63,7 +65,7 @@ class DockerManager(ContainerManager):
                 ports=ports,
                 environment=env_vars,
                 detach=detach,
-                remove=remove,  # If True, container is removed on stop/exit
+                remove=remove,
             )
             self._logger.info(
                 f"Container {name}:{container.short_id} started successfully."
@@ -74,7 +76,7 @@ class DockerManager(ContainerManager):
             self._logger.error(f"Docker API error starting container {name}: {api_err}")
             if "port is already allocated" in str(api_err):
                 self._logger.error(
-                    f"Port conflict: Check if ports {ports.values()} are already in use."
+                    f"Port conflict: Check if ports {list(ports.values())} are already in use."
                 )
             elif "container name" in str(api_err) and "is already in use" in str(
                 api_err
@@ -92,7 +94,7 @@ class DockerManager(ContainerManager):
     def stop_container(self, name: str) -> bool:
         """Stops a running container by name."""
         if not self._ensure_client():
-            return False  # Ensure client is ready
+            return False
 
         try:
             self._logger.info(f"Attempting to stop container '{name}'...")
@@ -102,9 +104,7 @@ class DockerManager(ContainerManager):
             return True
         except NotFound:
             self._logger.warning(f"Container '{name}' not found, cannot stop.")
-            return (
-                False  # Or True if "not found" means "already stopped"? False is safer.
-            )
+            return False
         except APIError as api_err:
             self._logger.error(f"Docker API error stopping container {name}: {api_err}")
             return False
@@ -117,7 +117,7 @@ class DockerManager(ContainerManager):
     def remove_container(self, name: str) -> bool:
         """Removes a container by name (forcefully)."""
         if not self._ensure_client():
-            return False  # Ensure client is ready
+            return False
 
         try:
             self._logger.info(f"Attempting to remove container '{name}'...")
@@ -127,7 +127,7 @@ class DockerManager(ContainerManager):
             return True
         except NotFound:
             self._logger.warning(f"Container '{name}' not found, cannot remove.")
-            return False  # Or True if not found means already removed? False is safer.
+            return False
         except APIError as api_err:
             self._logger.error(f"Docker API error removing container {name}: {api_err}")
             return False
@@ -137,11 +137,10 @@ class DockerManager(ContainerManager):
             )
             return False
 
-    # Renamed for clarity
     def _remove_container_if_exists(self, container_name: str):
         """Stops and removes a container if it exists."""
         if not self._ensure_client():
-            return  # Cannot do anything without client
+            return
 
         try:
             container = self._client.containers.get(container_name)
@@ -151,7 +150,6 @@ class DockerManager(ContainerManager):
             try:
                 container.stop()
             except APIError as stop_err:
-                # Log stop error but proceed to remove if possible
                 self._logger.warning(
                     f"Error stopping container {container_name} before removal: {stop_err}"
                 )
@@ -265,114 +263,23 @@ class DockerManager(ContainerManager):
         except Exception as e:
             self._logger.error(f"Error checking image {image}: {e}", exc_info=True)
 
-    # Modified to accept memory argument
-    def _start_daemon(
-        self, memory_gb: Optional[int] = None
-    ) -> Optional[docker.client.DockerClient]:
-        system = platform.system()
-        self._logger.info(f"Detected system: {system}")
-
-        if system == "Windows":
+    def _start_daemon(self) -> Optional[docker.client.DockerClient]:
+        """
+        Attempts to connect to an existing Docker daemon.
+        The user is responsible for ensuring the Docker daemon is running and accessible.
+        """
+        self._logger.info(
+            "Attempting to connect to Docker daemon. Ensure it is running and accessible."
+        )
+        try:
+            client = docker.from_env()
+            client.ping()  # Test connection
+            self._logger.info("Successfully connected to Docker daemon.")
+            return client
+        except Exception as e:
             self._logger.error(
-                "Docker daemon management (like Colima) is not supported automatically on Windows."
+                f"Failed to connect to Docker daemon: {e}. "
+                "Please ensure Docker (e.g., Docker Desktop, Colima, or native Docker service) "
+                "is running and configured correctly."
             )
-            # Try connecting directly assuming Docker Desktop is running
-            try:
-                client = docker.from_env()
-                client.ping()  # Test connection
-                self._logger.info(
-                    "Successfully connected to Docker daemon (likely Docker Desktop)."
-                )
-                return client
-            except Exception as e:
-                self._logger.error(
-                    f"Failed to connect to Docker daemon on Windows: {e}. Ensure Docker Desktop is running."
-                )
-                return None
-
-        elif system == "Linux":
-            # Assume Docker daemon is managed by systemd or similar
-            try:
-                client = docker.from_env()
-                client.ping()  # Test connection
-                self._logger.info("Successfully connected to Docker daemon on Linux.")
-                return client
-            except Exception as e:
-                self._logger.error(
-                    f"Failed to connect to Docker daemon on Linux: {e}. Ensure Docker service is running and user has permissions."
-                )
-                return None
-
-        elif system == "Darwin":  # MacOS
-            self._logger.info("Attempting to manage Docker daemon via Colima on MacOS.")
-            try:
-                # Check Colima status
-                res = subprocess.run(
-                    ["colima", "status"], capture_output=True, text=True, check=False
-                )
-                is_running = "Running" in res.stdout and "level=fatal" not in res.stderr
-
-                if not is_running:
-                    self._logger.info(
-                        "Colima is not running. Attempting to start Colima..."
-                    )
-                    # Use provided memory or default from config
-                    effective_memory_gb = (
-                        memory_gb if memory_gb is not None else cfg.COLIMA_MEMORY_SIZE
-                    )
-                    colima_memory_size = str(effective_memory_gb)
-                    self._logger.info(
-                        f"Using Colima memory size: {colima_memory_size}GB"
-                    )
-                    start_cmd = ["colima", "start", "--memory", colima_memory_size]
-                    # Consider adding '--arch', etc., if needed based on config
-                    start_res = subprocess.run(
-                        start_cmd, check=True, capture_output=True, text=True
-                    )
-                    self._logger.info("Colima started successfully.")
-                    self._logger.debug(
-                        f"Colima start output:\n{start_res.stdout}\n{start_res.stderr}"
-                    )
-                else:
-                    self._logger.info("Colima is already running.")
-
-                # Set DOCKER_HOST environment variable for docker-py
-                home_dir = os.getenv("HOME")
-                if not home_dir:
-                    self._logger.error("Could not determine HOME directory.")
-                    return None
-                docker_sock_path = f"unix://{home_dir}/.colima/default/docker.sock"
-                os.environ["DOCKER_HOST"] = docker_sock_path
-                self._logger.debug(f"Set DOCKER_HOST to: {docker_sock_path}")
-
-                # Connect using updated environment
-                client = docker.from_env()
-                client.ping()  # Verify connection
-                self._logger.info(
-                    "Successfully connected to Docker daemon via Colima socket."
-                )
-                return client
-
-            except FileNotFoundError:
-                self._logger.error(
-                    "Colima command not found. Please install Colima (brew install colima)."
-                )
-                return None
-            except subprocess.CalledProcessError as cpe:
-                self._logger.error(f"Error executing Colima command: {cpe}")
-                self._logger.error(f"Colima stderr:\n{cpe.stderr}")
-                return None
-            except Exception as e:
-                self._logger.error(
-                    f"Error managing Colima or connecting to Docker daemon: {e}",
-                    exc_info=True,
-                )
-                return None
-        else:
-            self._logger.error(f"Unsupported operating system: {system}")
             return None
-
-
-# Remove the main() block from container_manager.py
-# if __name__ == "__main__":
-#    main()

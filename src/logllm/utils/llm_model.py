@@ -25,6 +25,8 @@ try:
     from vertexai.preview import tokenization
 
     VERTEX_TOKENIZER_AVAILABLE = True
+
+
 except ImportError:
     VERTEX_TOKENIZER_AVAILABLE = False
     print(

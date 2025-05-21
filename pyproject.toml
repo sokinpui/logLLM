@@ -9,7 +9,7 @@ description = "A log analysis tool using LLMs and related technologies"
 readme = "README.md"
 requires-python = ">=3.8"  # Adjust based on your needs
 authors = [
-    { name = "Your Name", email = "your.email@example.com" },  # Replace with your details
+    { name = "So Kin Pui", email = "sosokinpui@gmail.com" },  # Replace with your details
 ]
 license = { text = "MIT" }  # Or your preferred license
 dependencies = [
