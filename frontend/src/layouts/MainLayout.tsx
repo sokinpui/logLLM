@@ -8,7 +8,7 @@ import Sidebar from '../components/sidebar/Sidebar';
 import { ThemeContext } from '../theme/CustomThemeProvider';
 
 const MainLayout: React.FC = () => {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(true); // Sidebar starts open
   const { mode, toggleTheme } = React.useContext(ThemeContext);
 
   const handleDrawerOpen = () => {
@@ -19,6 +19,11 @@ const MainLayout: React.FC = () => {
     setOpen(false);
   };
 
+  // Toggle drawer state
+  const handleDrawerToggle = () => {
+    setOpen(!open);
+  };
+
   return (
     <Box sx={{ display: 'flex' }}>
       <CssBaseline />
@@ -26,12 +31,12 @@ const MainLayout: React.FC = () => {
         <Toolbar>
           <IconButton
             color="inherit"
-            aria-label="open drawer"
-            onClick={handleDrawerOpen}
+            aria-label={open ? "close drawer" : "open drawer"}
+            onClick={handleDrawerToggle} // Use toggle for the main menu button
             edge="start"
             sx={{
               marginRight: 5,
-              ...(open && { display: 'none' }),
+              // ...(open && { display: 'none' }), // Keep this if you want the icon to hide when drawer is open and wide
             }}
           >
             <MenuIcon />

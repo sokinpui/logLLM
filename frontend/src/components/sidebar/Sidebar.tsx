@@ -10,8 +10,9 @@ import {
   useTheme,
   IconButton,
   Divider,
+  Tooltip, // Import Tooltip
 } from '@mui/material';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom'; // Import useLocation
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import StorageIcon from '@mui/icons-material/Storage'; // For Container/DB
 import FolderOpenIcon from '@mui/icons-material/FolderOpen'; // For Collect
@@ -20,7 +21,7 @@ import ManageSearchIcon from '@mui/icons-material/ManageSearch'; // For ES-Parse
 import PlaylistAddCheckIcon from '@mui/icons-material/PlaylistAddCheck'; // For Prompts Manager
 import TimerIcon from '@mui/icons-material/Timer'; // For Normalize-TS
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'; // For Analyze Errors
-import MenuIcon from '@mui/icons-material/Menu';
+// import MenuIcon from '@mui/icons-material/Menu'; // Not used directly for toggle here, MainLayout handles it
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 
@@ -80,55 +81,73 @@ interface SidebarItem {
 
 const sidebarItems: SidebarItem[] = [
   { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
-  { text: 'Analyze Errors', icon: <ErrorOutlineIcon />, path: '/analyze-errors' },
-  { text: 'Collect Logs', icon: <FolderOpenIcon />, path: '/collect' },
   { text: 'Container Mgmt', icon: <StorageIcon />, path: '/container' },
-  { text: 'ES Parser', icon: <ManageSearchIcon />, path: '/es-parser' },
+  { text: 'Collect Logs', icon: <FolderOpenIcon />, path: '/collect' },
   { text: 'File Parser', icon: <TextFieldsIcon />, path: '/file-parser' },
+  { text: 'ES Parser', icon: <ManageSearchIcon />, path: '/es-parser' },
   { text: 'Normalize TS', icon: <TimerIcon />, path: '/normalize-ts' },
+  { text: 'Analyze Errors', icon: <ErrorOutlineIcon />, path: '/analyze-errors' },
   { text: 'Prompts Manager', icon: <PlaylistAddCheckIcon />, path: '/prompts-manager' },
 ];
 
 interface SidebarProps {
   open: boolean;
   handleDrawerClose: () => void;
-  handleDrawerOpen: () => void; // For completeness, though not used if only close exists
+  handleDrawerOpen: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ open, handleDrawerClose }) => {
+const Sidebar: React.FC<SidebarProps> = ({ open, handleDrawerClose, handleDrawerOpen }) => {
   const theme = useTheme();
+  const location = useLocation(); // For active route styling
 
   return (
     <StyledDrawer variant="permanent" open={open}>
       <DrawerHeader>
-        <IconButton onClick={handleDrawerClose}>
-          {theme.direction === 'rtl' ? <ChevronRightIcon /> : <ChevronLeftIcon />}
+        <IconButton onClick={open ? handleDrawerClose : handleDrawerOpen}>
+          {/* Toggle icon based on open state, consistent with drawer behavior */}
+          {open ? (theme.direction === 'rtl' ? <ChevronRightIcon /> : <ChevronLeftIcon />) : (theme.direction === 'rtl' ? <ChevronLeftIcon /> : <ChevronRightIcon />) }
         </IconButton>
       </DrawerHeader>
       <Divider />
       <List>
         {sidebarItems.map((item) => (
-          <ListItemButton
-            key={item.text}
-            component={Link}
-            to={item.path}
-            sx={{
-              minHeight: 48,
-              justifyContent: open ? 'initial' : 'center',
-              px: 2.5,
-            }}
-          >
-            <ListItemIcon
+          <Tooltip title={!open ? item.text : ""} placement="right" key={`${item.text}-tooltip`}>
+            <ListItemButton
+              key={item.text}
+              component={Link}
+              to={item.path}
+              selected={location.pathname === item.path} // Active route styling
               sx={{
-                minWidth: 0,
-                mr: open ? 3 : 'auto',
-                justifyContent: 'center',
+                minHeight: 48,
+                justifyContent: open ? 'initial' : 'center',
+                px: 2.5,
+                '&.Mui-selected': { // Styles for selected item
+                  backgroundColor: theme.palette.action.selected,
+                  '&:hover': {
+                    backgroundColor: theme.palette.action.hover,
+                  },
+                },
               }}
             >
-              {item.icon}
-            </ListItemIcon>
-            <ListItemText primary={item.text} sx={{ opacity: open ? 1 : 0 }} />
-          </ListItemButton>
+              <ListItemIcon
+                sx={{
+                  minWidth: 0,
+                  mr: open ? 3 : 'auto',
+                  justifyContent: 'center',
+                  color: location.pathname === item.path ? theme.palette.primary.main : 'inherit', // Icon color for active route
+                }}
+              >
+                {item.icon}
+              </ListItemIcon>
+              <ListItemText
+                primary={item.text}
+                sx={{
+                  opacity: open ? 1 : 0,
+                  color: location.pathname === item.path ? theme.palette.primary.main : 'inherit', // Text color for active route
+                }}
+              />
+            </ListItemButton>
+          </Tooltip>
         ))}
       </List>
     </StyledDrawer>
