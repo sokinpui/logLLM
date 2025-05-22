@@ -26,8 +26,8 @@ google-cloud-aiplatform
 google-generativeai
 
 setuptools
-sentencepiece
 
 fastapi
 uvicorn
+sentencepiece
 
