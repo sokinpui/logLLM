@@ -71,7 +71,7 @@ if __name__ == "__main__":
     # Since we are in main.py and app is defined in this file, 'main:app'
     # or simply passing the app object directly works.
     uvicorn.run(
-        "src.logllm.api.main:app",  # Path to the FastAPI app instance
+        "logllm.api.main:app",  # Path to the FastAPI app instance
         host="127.0.0.1",
         port=8000,
         log_level="info",

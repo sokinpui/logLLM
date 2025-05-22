@@ -1,5 +1,8 @@
-import { createTheme, ThemeOptions } from "@mui/material/styles";
-import { PaletteMode } from "@mui/material";
+// --- Update: frontend/src/theme/theme.ts ---
+// import { createTheme, ThemeOptions } from "@mui/material/styles"; // Old line
+import { createTheme } from "@mui/material/styles";
+import type { ThemeOptions } from "@mui/material/styles"; // Correct explicit type import
+import type { PaletteMode } from "@mui/material/styles";
 
 const getDesignTokens = (mode: PaletteMode): ThemeOptions => ({
   palette: {

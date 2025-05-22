@@ -27,3 +27,7 @@ google-generativeai
 
 setuptools
 sentencepiece
+
+fastapi
+uvicorn
+
