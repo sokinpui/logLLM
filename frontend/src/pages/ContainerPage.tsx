@@ -1,4 +1,3 @@
-// --- Finalized: frontend/src/pages/ContainerPage.tsx ---
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Typography,
@@ -19,17 +18,31 @@ import {
   ListItem,
   ListItemText,
   IconButton,
+  Tooltip,
+  Stack, // For better layout of details
+  TableContainer,
+  Table,
+  TableBody,
+  TableRow,
+  TableCell,
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import StorageIcon from '@mui/icons-material/Storage'; // For Volume
+import DnsIcon from '@mui/icons-material/Dns'; // For Container
+import IdIcon from '@mui/icons-material/Fingerprint'; // For ID
+import PortIcon from '@mui/icons-material/SettingsEthernet'; // For Ports
+import MountIcon from '@mui/icons-material/BackupTable'; // For Mounts
+
 
 import * as containerService from '../services/containerService';
-import type { ContainerStatusItem, ApiError } from '../types/api';
+import type { ContainerDetailItem, VolumeDetailItem, ApiError } from '../types/api';
 
 const ContainerPage: React.FC = () => {
-  const [statuses, setStatuses] = useState<ContainerStatusItem[]>([]);
+  const [containerDetails, setContainerDetails] = useState<ContainerDetailItem[]>([]);
+  const [volumeInfo, setVolumeInfo] = useState<VolumeDetailItem | null>(null);
   const [loadingStatus, setLoadingStatus] = useState<boolean>(true);
   const [actionLoading, setActionLoading] = useState<{
     start?: boolean;
@@ -43,28 +56,31 @@ const ContainerPage: React.FC = () => {
   const fetchStatus = useCallback(async (showLoadingSpinner: boolean = true) => {
     if (showLoadingSpinner) setLoadingStatus(true);
     setError(null);
-    // Keep previous success message or clear it? For now, let's clear it on manual refresh.
-    // If an action was just performed, its success message will be set by handleAction.
-    // setSuccessMessage(null);
     try {
       const data = await containerService.getContainerStatus();
       if (data && Array.isArray(data.statuses)) {
-        setStatuses(data.statuses);
+        setContainerDetails(data.statuses);
       } else {
-        console.error("Invalid status data received from API:", data);
-        setError("Received invalid status data from the server.");
-        setStatuses([]);
+        console.error("Invalid container status data received from API:", data.statuses);
+        setError("Received invalid container status data from the server.");
+        setContainerDetails([]);
+      }
+      if (data && data.volume_info) {
+        setVolumeInfo(data.volume_info);
+      } else {
+        setVolumeInfo(null); // Or a default error state for volume
       }
     } catch (err) {
       const apiError = err as ApiError;
-      let errorMessage = 'Failed to fetch container status.';
+      let errorMessage = 'Failed to fetch service status.';
       if (typeof apiError.detail === 'string') {
         errorMessage = apiError.detail;
       } else if (Array.isArray(apiError.detail) && apiError.detail.length > 0 && typeof apiError.detail[0] === 'object' && apiError.detail[0].msg) {
         errorMessage = apiError.detail[0].msg;
       }
       setError(errorMessage);
-      setStatuses([]);
+      setContainerDetails([]);
+      setVolumeInfo(null);
     } finally {
       if (showLoadingSpinner) setLoadingStatus(false);
     }
@@ -85,8 +101,7 @@ const ContainerPage: React.FC = () => {
     try {
       const response = await action();
       setSuccessMessage(`${successMsgPrefix}: ${response.message}`);
-      // Wait a brief moment before refreshing status to allow backend to process
-      setTimeout(() => fetchStatus(false), 1500);
+      setTimeout(() => fetchStatus(false), 2500); // Increased delay for backend
     } catch (err) {
       const apiError = err as ApiError;
       let errorMessage = `Failed to ${actionName} containers.`;
@@ -125,26 +140,47 @@ const ContainerPage: React.FC = () => {
     if (typeof status !== 'string') return 'default';
     const lowerStatus = status.toLowerCase();
     if (lowerStatus.includes('running')) return 'success';
-    if (lowerStatus.includes('up') && lowerStatus.includes('second')) return 'success'; // For "Up X seconds"
+    if (lowerStatus.includes('up') && (lowerStatus.includes('second') || lowerStatus.includes('minute') || lowerStatus.includes('hour'))) return 'success';
     if (lowerStatus.includes('stopped') || lowerStatus.includes('exited')) return 'error';
-    if (lowerStatus.includes('not found')) return 'default';
-    return 'warning'; // for creating, restarting, unhealthy etc.
+    if (lowerStatus.includes('not found') || lowerStatus.includes('not_found')) return 'default';
+    if (lowerStatus.includes('error')) return 'error';
+    return 'warning';
   };
 
   const formatContainerName = (name?: string): string => {
     if (typeof name !== 'string' || !name) return "Unknown Container";
-    // A more generic approach to pretty print common container names
     return name
-      .replace(/^movelook_/, '') // Remove common prefix
+      .replace(/^movelook_/, '')
       .split('_')
       .map(word => word.charAt(0).toUpperCase() + word.slice(1))
       .join(' ');
   };
-
+  
   const isAnyActionLoading = Object.values(actionLoading).some(Boolean);
 
+  const renderDetailRow = (icon: React.ReactNode, label: string, value?: string | string[] | null) => {
+    if (!value || (Array.isArray(value) && value.length === 0)) {
+      return null; // Don't render if value is empty or not present
+    }
+    return (
+      <TableRow>
+        <TableCell sx={{ borderBottom: 'none', py: 0.5, width: 'auto' }}><Stack direction="row" alignItems="center" spacing={1}>{icon} <Typography variant="caption">{label}:</Typography></Stack></TableCell>
+        <TableCell sx={{ borderBottom: 'none', py: 0.5 }}>
+          {Array.isArray(value) ? (
+            <List dense sx={{p:0}}>
+              {value.map((item, idx) => <ListItem key={idx} sx={{p:0}}><Typography variant="caption" color="text.secondary">{item}</Typography></ListItem>)}
+            </List>
+          ) : (
+            <Typography variant="caption" color="text.secondary">{value}</Typography>
+          )}
+        </TableCell>
+      </TableRow>
+    );
+  }
+
+
   return (
-    <Paper sx={{ p: 3, maxWidth: 800, margin: 'auto' }}>
+    <Paper sx={{ p: 3, maxWidth: 900, margin: 'auto' }}>
       <Typography variant="h4" gutterBottom sx={{ textAlign: 'center', mb: 3 }}>
         Services Management
       </Typography>
@@ -159,60 +195,104 @@ const ContainerPage: React.FC = () => {
           {successMessage}
         </Alert>
       )}
-
-      <Card sx={{ mb: 3 }}>
-        <CardContent>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1}}>
-            <Typography variant="h6">
-              Current Status
-            </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2}}>
+        <Tooltip title="Refresh Status">
             <IconButton
-              onClick={() => fetchStatus(true)}
-              size="small"
-              disabled={loadingStatus || isAnyActionLoading}
-              title="Refresh Status"
+            onClick={() => fetchStatus(true)}
+            disabled={loadingStatus || isAnyActionLoading}
             >
-              <RefreshIcon />
+            <RefreshIcon />
             </IconButton>
-          </Box>
-          {loadingStatus ? (
-            <Box sx={{ display: 'flex', justifyContent: 'center', my: 3 }}>
-              <CircularProgress />
-            </Box>
-          ) : statuses && statuses.length > 0 ? (
-            <List dense>
-              {statuses.map((s, index) => {
-                if (!s || typeof s.name !== 'string' || typeof s.status !== 'string') {
-                  return (
-                    <ListItem key={`error-item-${index}`}>
-                      <ListItemText primary="Error: Invalid status item data from API." />
-                    </ListItem>
-                  );
-                }
-                return (
-                  <ListItem key={s.name} sx={{ py: 0.5 }}>
-                    <ListItemText
-                      primary={formatContainerName(s.name)}
-                    />
+        </Tooltip>
+      </Box>
+
+      {loadingStatus ? (
+        <Box sx={{ display: 'flex', justifyContent: 'center', my: 5 }}>
+          <CircularProgress size={50} />
+        </Box>
+      ) : (
+        <Grid container spacing={3}>
+          {/* Container Details */}
+          {containerDetails && containerDetails.map((detail) => (
+            <Grid item xs={12} md={6} key={detail.name}>
+              <Card elevation={3}>
+                <CardContent>
+                  <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1} mb={1.5}>
+                    <Stack direction="row" alignItems="center" spacing={1}>
+                        <DnsIcon color={getStatusChipColor(detail.status) === 'success' ? 'success' : getStatusChipColor(detail.status) === 'error' ? 'error' : 'action'}/>
+                        <Typography variant="h6">{formatContainerName(detail.name)}</Typography>
+                    </Stack>
                     <Chip
-                      label={s.status || "N/A"}
-                      color={getStatusChipColor(s.status)}
+                      label={detail.status || "N/A"}
+                      color={getStatusChipColor(detail.status)}
                       size="small"
                     />
-                  </ListItem>
-                );
-              })}
-            </List>
-          ) : (
-            <Typography color="text.secondary" sx={{textAlign: 'center', my: 2}}>
-                No status information available. The backend might be down or services not yet started.
-            </Typography>
-          )}
-        </CardContent>
-      </Card>
+                  </Stack>
+                  <Divider sx={{my:1}}/>
+                  <TableContainer>
+                    <Table size="small">
+                      <TableBody>
+                        {renderDetailRow(<IdIcon fontSize="small"/>, "ID", detail.short_id || detail.container_id?.substring(0,12))}
+                        {renderDetailRow(<PortIcon fontSize="small"/>, "Ports", detail.ports)}
+                        {renderDetailRow(<MountIcon fontSize="small"/>, "Mounts", detail.mounts)}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </CardContent>
+              </Card>
+            </Grid>
+          ))}
 
-      <Grid container spacing={2} alignItems="center">
-        <Grid item xs={12} sm={4}>
+          {/* Volume Details */}
+          {volumeInfo && (
+             <Grid item xs={12} md={containerDetails.length % 2 !== 0 ? 6 : 12}>
+                <Card elevation={3}>
+                    <CardContent>
+                    <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1} mb={1.5}>
+                         <Stack direction="row" alignItems="center" spacing={1}>
+                            <StorageIcon color={getStatusChipColor(volumeInfo.status) === 'success' || volumeInfo.status === 'found' ? 'success' : getStatusChipColor(volumeInfo.status) === 'error' ? 'error' : 'action'}/>
+                            <Typography variant="h6">Volume: {volumeInfo.name}</Typography>
+                        </Stack>
+                        <Chip
+                            label={volumeInfo.status || "N/A"}
+                            color={getStatusChipColor(volumeInfo.status === 'found' ? 'running' : volumeInfo.status)} // Map "found" to "running" for color
+                            size="small"
+                        />
+                    </Stack>
+                    <Divider sx={{my:1}}/>
+                    <TableContainer>
+                        <Table size="small">
+                        <TableBody>
+                            {renderDetailRow(<IdIcon fontSize="small"/>,"Driver", volumeInfo.driver)}
+                            {renderDetailRow(<MountIcon fontSize="small"/>,"Mountpoint", volumeInfo.mountpoint)}
+                            {renderDetailRow(<DnsIcon fontSize="small"/>,"Scope", volumeInfo.scope)}
+                        </TableBody>
+                        </Table>
+                    </TableContainer>
+                    </CardContent>
+                </Card>
+            </Grid>
+          )}
+           {!volumeInfo && !loadingStatus && (
+             <Grid item xs={12}>
+                <Typography color="text.secondary" sx={{textAlign: 'center', my: 2}}>
+                    Volume information not available.
+                </Typography>
+             </Grid>
+           )}
+        </Grid>
+      )}
+      
+      {(!containerDetails || containerDetails.length === 0) && !loadingStatus && (
+         <Typography color="text.secondary" sx={{textAlign: 'center', my: 3}}>
+            No container status information available. Backend might be down or services not started.
+        </Typography>
+      )}
+
+
+      <Divider sx={{my:3}}/>
+      <Grid container spacing={2} alignItems="center" justifyContent="center">
+        <Grid item xs={12} sm={6} md={3}>
           <Button
             variant="contained"
             color="success"
@@ -224,7 +304,7 @@ const ContainerPage: React.FC = () => {
             Start Services
           </Button>
         </Grid>
-        <Grid item xs={12} sm={4}>
+        <Grid item xs={12} sm={6} md={3}>
           <Button
             variant="contained"
             color="error"
@@ -236,7 +316,7 @@ const ContainerPage: React.FC = () => {
             Stop Services
           </Button>
         </Grid>
-        <Grid item xs={12} sm={4}>
+        <Grid item xs={12} sm={6} md={3}>
           <Button
             variant="outlined"
             color="primary"
@@ -248,7 +328,7 @@ const ContainerPage: React.FC = () => {
             Restart Services
           </Button>
         </Grid>
-        <Grid item xs={12} sx={{ mt: 1, display: 'flex', justifyContent: 'center' }}>
+         <Grid item xs={12} sm={6} md={3} sx={{ display: 'flex', justifyContent: 'center' }}>
           <FormGroup>
             <FormControlLabel
               control={
@@ -256,15 +336,15 @@ const ContainerPage: React.FC = () => {
                   checked={removeOnStop}
                   onChange={(e) => setRemoveOnStop(e.target.checked)}
                   disabled={loadingStatus || isAnyActionLoading}
+                  size="small"
                 />
               }
-              label="Remove containers on stop"
+              label={<Typography variant="body2">Remove on stop</Typography>}
             />
           </FormGroup>
         </Grid>
       </Grid>
-      <Divider sx={{my:3}}/>
-      <Typography variant="body2" color="textSecondary" sx={{textAlign: 'center'}}>
+      <Typography variant="caption" color="textSecondary" component="p" sx={{textAlign: 'center', mt: 3}}>
         These actions manage the Elasticsearch and Kibana Docker containers.
         Ensure Docker is running. Status updates may take a few moments to reflect.
       </Typography>

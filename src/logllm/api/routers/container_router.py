@@ -5,8 +5,9 @@ from ...config import config as cfg  # Adjust path if necessary
 # --- UNCOMMENT AND IMPORT ACTUAL MANAGER AND CONFIG ---
 from ...utils.container_manager import DockerManager  # Adjust path if necessary
 from ..models.common_models import MessageResponse
+from ..models.container_models import ContainerDetailItem  # Updated
+from ..models.container_models import VolumeDetailItem  # Added
 from ..models.container_models import (
-    ContainerStatusItem,
     ContainerStatusResponse,
     ContainerStopRequest,
 )
@@ -123,6 +124,11 @@ async def stop_container_services(request: ContainerStopRequest):
                 message.append(f"{cfg.ELASTIC_SEARCH_CONTAINER_NAME} removed.")
             if kbn_removed:
                 message.append(f"{cfg.KIBANA_CONTAINER_NAME} removed.")
+
+            # Optionally remove volume if requested and no containers are using it
+            # For now, volume removal is not part of this endpoint to prevent accidental data loss.
+            # It could be a separate explicit action.
+
             return MessageResponse(message=" ".join(message))
         return MessageResponse(message=" ".join(message))
     except Exception as e:
@@ -136,56 +142,60 @@ async def stop_container_services(request: ContainerStopRequest):
 
 @router.get("/status", response_model=ContainerStatusResponse)
 async def get_container_services_status():
-    if not manager:
-        # If manager didn't initialize, return an error status for all
-        return ContainerStatusResponse(
-            statuses=[
-                ContainerStatusItem(
-                    name=cfg.ELASTIC_SEARCH_CONTAINER_NAME,
-                    status="error (manager init failed)",
-                ),
-                ContainerStatusItem(
-                    name=cfg.KIBANA_CONTAINER_NAME, status="error (manager init failed)"
-                ),
-            ]
-        )
-    try:
-        # --- UNCOMMENT THE REAL LOGIC ---
-        # Ensure Docker client is available within the manager
-        # It's okay for _ensure_client to return False if Docker isn't running.
-        # get_container_status should then return "error" or "not found".
-        manager._ensure_client()  # Try to connect, but don't fail hard if it doesn't.
+    container_details_list = []
+    volume_details = None
 
-        es_status = manager.get_container_status(cfg.ELASTIC_SEARCH_CONTAINER_NAME)
-        kbn_status = manager.get_container_status(cfg.KIBANA_CONTAINER_NAME)
-        return ContainerStatusResponse(
-            statuses=[
-                ContainerStatusItem(
-                    name=cfg.ELASTIC_SEARCH_CONTAINER_NAME, status=es_status
-                ),
-                ContainerStatusItem(name=cfg.KIBANA_CONTAINER_NAME, status=kbn_status),
-            ]
+    if not manager:
+        # Manager initialization failed
+        es_item = ContainerDetailItem(
+            name=cfg.ELASTIC_SEARCH_CONTAINER_NAME, status="error (manager init failed)"
         )
+        kbn_item = ContainerDetailItem(
+            name=cfg.KIBANA_CONTAINER_NAME, status="error (manager init failed)"
+        )
+        container_details_list.extend([es_item, kbn_item])
+        volume_details = VolumeDetailItem(
+            name=cfg.DOCKER_VOLUME_NAME, status="error (manager init failed)"
+        )
+        return ContainerStatusResponse(
+            statuses=container_details_list, volume_info=volume_details
+        )
+
+    try:
+        manager._ensure_client()  # Try to connect, but get_container_details handles individual failures
+
+        es_details_dict = manager.get_container_details(
+            cfg.ELASTIC_SEARCH_CONTAINER_NAME
+        )
+        kbn_details_dict = manager.get_container_details(cfg.KIBANA_CONTAINER_NAME)
+
+        es_item = ContainerDetailItem(**es_details_dict)
+        kbn_item = ContainerDetailItem(**kbn_details_dict)
+        container_details_list.extend([es_item, kbn_item])
+
+        # Get volume details
+        volume_dict = manager.get_volume_details(cfg.DOCKER_VOLUME_NAME)
+        volume_details = VolumeDetailItem(**volume_dict)
+
+        return ContainerStatusResponse(
+            statuses=container_details_list, volume_info=volume_details
+        )
+
     except Exception as e:
         # This catch-all is for unexpected errors during status check
-        # Individual container errors (like "not found") are handled by get_container_status
-        # and returned as part of the status string.
-        return ContainerStatusResponse(
-            statuses=[
-                ContainerStatusItem(
-                    name=cfg.ELASTIC_SEARCH_CONTAINER_NAME, status=f"error ({str(e)})"
-                ),
-                ContainerStatusItem(
-                    name=cfg.KIBANA_CONTAINER_NAME, status=f"error ({str(e)})"
-                ),
-            ]
+        es_item = ContainerDetailItem(
+            name=cfg.ELASTIC_SEARCH_CONTAINER_NAME, status=f"error ({str(e)})"
         )
-    # --- REMOVE THE MOCK RESPONSE ---
-    # mock_statuses = [
-    #     ContainerStatusItem(name="movelook_elastic_search", status="running (mock)"),
-    #     ContainerStatusItem(name="movelook_kibana", status="stopped (mock)"),
-    # ]
-    # return ContainerStatusResponse(statuses=mock_statuses)
+        kbn_item = ContainerDetailItem(
+            name=cfg.KIBANA_CONTAINER_NAME, status=f"error ({str(e)})"
+        )
+        container_details_list.extend([es_item, kbn_item])
+        volume_details = VolumeDetailItem(
+            name=cfg.DOCKER_VOLUME_NAME, status=f"error ({str(e)})"
+        )
+        return ContainerStatusResponse(
+            statuses=container_details_list, volume_info=volume_details
+        )
 
 
 @router.post("/restart", response_model=MessageResponse)

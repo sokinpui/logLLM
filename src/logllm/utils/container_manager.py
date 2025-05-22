@@ -4,7 +4,7 @@ import os
 import platform
 import subprocess
 from abc import ABC, abstractmethod
-from typing import Optional  # Added Optional
+from typing import Any, Dict, List, Optional  # Added Dict, Any, List
 
 import docker
 from docker.errors import APIError, NotFound
@@ -16,6 +16,16 @@ class ContainerManager(ABC):
     # ... (abstract methods) ...
     @abstractmethod
     def remove_container(self, name: str) -> bool:  # Add remove abstract method
+        pass
+
+    @abstractmethod
+    def get_container_details(self, name: str) -> Dict[str, Any]:  # New abstract method
+        pass
+
+    @abstractmethod
+    def get_volume_details(
+        self, volume_name: str
+    ) -> Dict[str, Any]:  # New abstract method
         pass
 
 
@@ -168,24 +178,124 @@ class DockerManager(ContainerManager):
                 f"Generic error removing container {container_name}: {e}", exc_info=True
             )
 
-    def get_container_status(self, name: str) -> str:
-        """Gets the status of a container by name."""
+    def get_container_details(self, name: str) -> Dict[str, Any]:
+        """Gets detailed information of a container by name."""
+        details: Dict[str, Any] = {
+            "name": name,
+            "status": "error (client init failed)",
+            "id": None,
+            "short_id": None,
+            "ports": [],
+            "mounts": [],
+        }
+        if not self._ensure_client():
+            return details
+
+        try:
+            container = self._client.containers.get(name)
+            details["status"] = container.status
+            details["id"] = container.id
+            details["short_id"] = container.short_id
+
+            # Extract port bindings
+            port_bindings = container.attrs.get("HostConfig", {}).get("PortBindings")
+            if port_bindings:
+                formatted_ports = []
+                for container_port_protocol, host_bindings in port_bindings.items():
+                    if host_bindings:  # host_bindings is a list of dicts
+                        for binding in host_bindings:
+                            host_ip = binding.get("HostIp", "0.0.0.0")
+                            host_port = binding.get("HostPort", "")
+                            formatted_ports.append(
+                                f"{host_ip}:{host_port} -> {container_port_protocol}"
+                            )
+                details["ports"] = formatted_ports
+
+            # Extract mounts
+            mounts_data = container.attrs.get("Mounts")
+            if mounts_data:
+                formatted_mounts = []
+                for mount in mounts_data:
+                    mount_type = mount.get("Type", "N/A")
+                    source = mount.get("Source", "N/A")
+                    if mount_type == "volume":
+                        source = mount.get(
+                            "Name", source
+                        )  # Prefer volume name for type volume
+                    destination = mount.get("Destination", "N/A")
+                    formatted_mounts.append(f"{mount_type}: {source} -> {destination}")
+                details["mounts"] = formatted_mounts
+            return details
+        except NotFound:
+            details["status"] = "not found"
+            return details
+        except APIError as api_err:
+            self._logger.error(
+                f"Docker API error getting details for {name}: {api_err}"
+            )
+            details["status"] = "error (api)"
+            return details
+        except Exception as e:
+            self._logger.error(
+                f"Generic error getting details for {name}: {e}", exc_info=True
+            )
+            details["status"] = "error (general)"
+            return details
+
+    def get_container_status(
+        self, name: str
+    ) -> (
+        str
+    ):  # Kept for backward compatibility if anything uses it, but get_container_details is preferred
+        """Gets the status string of a container by name."""
         if not self._ensure_client():
             return "error (client init failed)"
-
         try:
             container = self._client.containers.get(name)
             return container.status
         except NotFound:
             return "not found"
-        except APIError as api_err:
-            self._logger.error(f"Docker API error getting status for {name}: {api_err}")
+        except APIError:
             return "error (api)"
+        except Exception:
+            return "error (general)"
+
+    def get_volume_details(self, volume_name: str) -> Dict[str, Any]:
+        """Gets details of a Docker volume by name."""
+        details: Dict[str, Any] = {
+            "name": volume_name,
+            "status": "error (client init failed)",
+            "driver": None,
+            "mountpoint": None,
+            "scope": None,
+        }
+        if not self._ensure_client():
+            return details
+
+        try:
+            volume = self._client.volumes.get(volume_name)
+            attrs = volume.attrs
+            details["status"] = "found"
+            details["driver"] = attrs.get("Driver")
+            details["mountpoint"] = attrs.get("Mountpoint")
+            details["scope"] = attrs.get("Scope")
+            return details
+        except NotFound:
+            details["status"] = "not_found"
+            return details
+        except APIError as api_err:
+            self._logger.error(
+                f"Docker API error getting volume details for {volume_name}: {api_err}"
+            )
+            details["status"] = "error (api)"
+            return details
         except Exception as e:
             self._logger.error(
-                f"Generic error getting status for {name}: {e}", exc_info=True
+                f"Generic error getting volume details for {volume_name}: {e}",
+                exc_info=True,
             )
-            return "error (general)"
+            details["status"] = "error (general)"
+            return details
 
     def _create_network(self, network_name: str):
         if not self._ensure_client():
@@ -283,3 +393,4 @@ class DockerManager(ContainerManager):
                 "is running and configured correctly."
             )
             return None
+
