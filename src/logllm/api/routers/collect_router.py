@@ -1,8 +1,11 @@
+# src/logllm/api/collect_router.py
+
 import json
 import os
 import shutil
 import tempfile
 import uuid
+from datetime import datetime  # <--- Moved to top
 from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
@@ -12,7 +15,7 @@ from pydantic import BaseModel
 from ...utils.collector import Collector
 from ...utils.database import ElasticsearchDatabase
 from ...utils.logger import Logger
-from ..models.collect_models import (  # Updated imports
+from ..models.collect_models import (
     CollectRequest,
     DirectoryAnalysisResponse,
     GroupInfoModel,
@@ -41,7 +44,7 @@ async def analyze_server_directory_structure(request: CollectRequest):
     if not os.path.isdir(directory):
         logger.warning(f"Path for analysis is not a directory: {directory}")
         return DirectoryAnalysisResponse(
-            path_exists=True,  # Path exists but not a dir
+            path_exists=True,
             root_files_present=False,
             identified_groups=[],
             error_message="Path exists but is not a directory.",
@@ -49,31 +52,26 @@ async def analyze_server_directory_structure(request: CollectRequest):
         )
 
     root_files_present = False
-    identified_groups_dict = {}  # group_name -> file_count
+    identified_groups_dict = {}
 
     try:
-        # Basic scan logic similar to Collector's init but without DB interaction or full file processing
-        # We only care about the *structure* for groups and root files.
         base_selected_folder_name = os.path.basename(directory.rstrip("/\\"))
 
         for item_name in os.listdir(directory):
             item_path = os.path.join(directory, item_name)
-            if item_name.startswith("."):  # Skip hidden files/folders
+            if item_name.startswith("."):
                 continue
 
             if os.path.isfile(item_path) and item_name.lower().endswith(
                 (".log", ".txt", ".gz")
-            ):  # Consider common log extensions
+            ):
                 root_files_present = True
             elif os.path.isdir(item_path):
-                # This is a potential group
                 group_name = item_name
                 file_count = 0
                 for _, _, files_in_group in os.walk(item_path):
                     for f_name in files_in_group:
-                        if f_name.lower().endswith(
-                            (".log", ".txt", ".gz")
-                        ):  # Count relevant files
+                        if f_name.lower().endswith((".log", ".txt", ".gz")):
                             file_count += 1
                 if file_count > 0:
                     identified_groups_dict[group_name] = file_count
@@ -96,7 +94,7 @@ async def analyze_server_directory_structure(request: CollectRequest):
     except Exception as e:
         logger.error(f"Error analyzing directory {directory}: {e}", exc_info=True)
         return DirectoryAnalysisResponse(
-            path_exists=True,  # It existed to get here
+            path_exists=True,
             root_files_present=False,
             identified_groups=[],
             error_message=f"Error during server-side analysis: {str(e)}",
@@ -105,10 +103,7 @@ async def analyze_server_directory_structure(request: CollectRequest):
 
 
 # --- Task Management (In-memory for simplicity, use Redis/DB for production) ---
-# This will store task statuses for polling
-COLLECTION_TASKS = (
-    {}
-)  # task_id -> {"status": "...", "progress_detail": "...", "completed": False, "error": None}
+COLLECTION_TASKS = {}
 
 
 def update_task_status(
@@ -124,7 +119,9 @@ def update_task_status(
     COLLECTION_TASKS[task_id]["progress_detail"] = detail
     COLLECTION_TASKS[task_id]["completed"] = completed
     COLLECTION_TASKS[task_id]["error"] = error
-    COLLECTION_TASKS[task_id]["last_updated"] = datetime.now().isoformat()
+    COLLECTION_TASKS[task_id][
+        "last_updated"
+    ] = datetime.now().isoformat()  # datetime is now imported at top
     logger.debug(f"Task {task_id} status updated: {status} - {detail}")
 
 
@@ -153,9 +150,9 @@ def run_server_path_collection_task_with_status(task_id: str, directory: str):
         update_task_status(
             task_id, "Scanning directory", f"Collector initializing for {directory}"
         )
-        collector = Collector(
-            directory
-        )  # This also updates group_infos in its __init__
+        # Collector instantiation also updates group_infos in its __init__
+        # It will now use the corrected LogFile ID logic
+        collector = Collector(directory)
 
         if not collector.collected_files:
             logger.info(f"Task {task_id}: No log files found in {directory}.")
@@ -164,9 +161,6 @@ def run_server_path_collection_task_with_status(task_id: str, directory: str):
             )
             return
 
-        # Simplified progress for now: "Inserting files"
-        # For more granular progress, Collector.insert_very_large_logs_into_db would need to accept a callback
-        # or be refactored to yield progress.
         update_task_status(
             task_id,
             "Processing",
@@ -176,7 +170,7 @@ def run_server_path_collection_task_with_status(task_id: str, directory: str):
             f"Task {task_id}: Collector found {len(collector.collected_files)} files. Starting insertion..."
         )
 
-        # This is a blocking call within the background task
+        # This call will use the corrected logic in collector.py
         collector.insert_very_large_logs_into_db(
             db=es_db, files=collector.collected_files
         )
@@ -198,9 +192,7 @@ async def start_collection_from_server_path(
 ):
     logger.info(f"Request to start collection from server path: {request.directory}")
 
-    if not os.path.isdir(
-        request.directory
-    ):  # Also validated by /analyze-structure, but good to have
+    if not os.path.isdir(request.directory):
         logger.error(f"Directory not found for collection: {request.directory}")
         raise HTTPException(
             status_code=400,
@@ -213,7 +205,7 @@ async def start_collection_from_server_path(
         "progress_detail": "",
         "completed": False,
         "error": None,
-        "last_updated": datetime.now().isoformat(),
+        "last_updated": datetime.now().isoformat(),  # datetime imported at top
     }
 
     background_tasks.add_task(
@@ -223,8 +215,10 @@ async def start_collection_from_server_path(
     logger.info(
         f"Task {task_id}: Collection from server path {request.directory} initiated."
     )
+    # Add task_id to the response message, so frontend can use it immediately
     return MessageResponse(
-        message=f"Collection initiated for '{request.directory}'. Task ID: {task_id}"
+        message=f"Collection initiated for '{request.directory}'. Task ID: {task_id}",
+        # task_id=task_id # Pydantic model MessageResponse doesn't have task_id, but it's in the message string
     )
 
 
@@ -262,14 +256,16 @@ def run_uploaded_collection_task_with_status(task_id: str, temp_server_path: str
             err_msg = "Elasticsearch not available."
             logger.error(f"Task {task_id}: {err_msg}")
             update_task_status(task_id, "Error", err_msg, completed=True, error=err_msg)
-            return  # Cleanup is handled in the finally block of the main endpoint now
+            return
 
         update_task_status(
             task_id,
             "Scanning directory",
             f"Collector initializing for {temp_server_path}",
         )
-        collector = Collector(temp_server_path)
+        collector = Collector(
+            temp_server_path
+        )  # Corrected LogFile ID logic will be used
 
         if not collector.collected_files:
             logger.info(
@@ -292,7 +288,7 @@ def run_uploaded_collection_task_with_status(task_id: str, temp_server_path: str
             f"Task {task_id}: Collector found {len(collector.collected_files)} uploaded files. Starting insertion..."
         )
 
-        collector.insert_very_large_logs_into_db(
+        collector.insert_very_large_logs_into_db(  # Corrected logic will be used
             db=es_db, files=collector.collected_files
         )
 
@@ -304,7 +300,7 @@ def run_uploaded_collection_task_with_status(task_id: str, temp_server_path: str
         err_msg = f"Error during collection of uploaded files: {str(e)}"
         logger.error(f"Task {task_id}: {err_msg}", exc_info=True)
         update_task_status(task_id, "Error", err_msg, completed=True, error=err_msg)
-    finally:  # Cleanup of temp_server_path is now handled in the endpoint itself after task is scheduled
+    finally:
         pass
 
 
@@ -331,9 +327,7 @@ async def upload_and_process_folder(
         )
 
     task_id = str(uuid.uuid4())
-    temp_upload_path = os.path.join(
-        tempfile.gettempdir(), f"logllm_upload_{task_id}"
-    )  # Link temp path to task_id
+    temp_upload_path = os.path.join(tempfile.gettempdir(), f"logllm_upload_{task_id}")
     os.makedirs(temp_upload_path, exist_ok=True)
     logger.info(
         f"Task {task_id}: Created temporary directory for upload: {temp_upload_path}"
@@ -344,7 +338,7 @@ async def upload_and_process_folder(
         "progress_detail": "",
         "completed": False,
         "error": None,
-        "last_updated": datetime.now().isoformat(),
+        "last_updated": datetime.now().isoformat(),  # datetime imported at top
     }
 
     try:
@@ -376,10 +370,6 @@ async def upload_and_process_folder(
         update_task_status(
             task_id, "Upload complete", "Files saved to server, preparing collection."
         )
-        # Schedule the background task. Crucially, the cleanup of temp_upload_path
-        # must happen *after* this background task completes or errors out.
-        # The background task itself can't easily delete its own root processing dir while running from it.
-        # So, we'll wrap the original background task to include cleanup.
 
         def collection_and_cleanup_task(current_task_id: str, path_to_clean: str):
             try:
@@ -404,21 +394,21 @@ async def upload_and_process_folder(
         logger.info(
             f"Task {task_id}: Collection from uploaded folder initiated. Temp path: {temp_upload_path}"
         )
+        # Add task_id to the response message
         return MessageResponse(
             message=f"Files uploaded. Collection initiated (Task ID: {task_id})."
+            # task_id=task_id # Pydantic model MessageResponse doesn't have task_id
         )
 
     except Exception as e:
         logger.error(
             f"Task {task_id}: Error processing uploaded files: {str(e)}", exc_info=True
         )
-        # Clean up partially created temp directory on immediate error during setup
         if os.path.exists(temp_upload_path):
             shutil.rmtree(temp_upload_path)
             logger.info(
                 f"Task {task_id}: Cleaned up temporary directory due to setup error: {temp_upload_path}"
             )
-        # Remove task entry if setup fails before backgrounding
         if task_id in COLLECTION_TASKS:
             del COLLECTION_TASKS[task_id]
         raise HTTPException(
@@ -426,4 +416,5 @@ async def upload_and_process_folder(
         )
 
 
-from datetime import datetime  # ensure datetime is imported at the top
+# Removed: from datetime import datetime  # ensure datetime is imported at the top
+# It's now correctly at the top of the file.
