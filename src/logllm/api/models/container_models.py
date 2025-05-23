@@ -16,6 +16,10 @@ class ContainerDetailItem(BaseModel):
     short_id: Optional[str] = None
     ports: Optional[List[str]] = []
     mounts: Optional[List[str]] = []
+    service_status: Optional[str] = (
+        None  # Status of the service (e.g., healthy, unhealthy)
+    )
+    service_url: Optional[str] = None  # URL to access the service if applicable
 
 
 class VolumeDetailItem(BaseModel):

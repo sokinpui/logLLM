@@ -3,13 +3,14 @@ export interface MessageResponse {
 }
 
 export interface ContainerDetailItem {
-  // Renamed from ContainerStatusItem
   name: string;
   status: string;
-  container_id?: string | null; // Changed from id to container_id to match Pydantic alias
+  container_id?: string | null;
   short_id?: string | null;
   ports?: string[] | null;
   mounts?: string[] | null;
+  service_status?: string | null; // Status of the service itself (e.g., healthy, green, yellow, red, available)
+  service_url?: string | null; // URL to access the service, e.g., Kibana dashboard
 }
 
 export interface VolumeDetailItem {
@@ -22,7 +23,7 @@ export interface VolumeDetailItem {
 
 export interface ContainerStatusResponse {
   statuses: ContainerDetailItem[];
-  volume_info?: VolumeDetailItem | null; // Added
+  volume_info?: VolumeDetailItem | null;
 }
 
 export interface ContainerStopRequest {

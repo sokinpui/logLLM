@@ -19,22 +19,25 @@ import {
   ListItemText,
   IconButton,
   Tooltip,
-  Stack, // For better layout of details
+  Stack,
   TableContainer,
   Table,
   TableBody,
   TableRow,
   TableCell,
+  Link as MuiLink, // For the Kibana link
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import StorageIcon from '@mui/icons-material/Storage'; // For Volume
-import DnsIcon from '@mui/icons-material/Dns'; // For Container
-import IdIcon from '@mui/icons-material/Fingerprint'; // For ID
-import PortIcon from '@mui/icons-material/SettingsEthernet'; // For Ports
-import MountIcon from '@mui/icons-material/BackupTable'; // For Mounts
+import StorageIcon from '@mui/icons-material/Storage';
+import DnsIcon from '@mui/icons-material/Dns';
+import IdIcon from '@mui/icons-material/Fingerprint';
+import PortIcon from '@mui/icons-material/SettingsEthernet';
+import MountIcon from '@mui/icons-material/BackupTable';
+import ServiceIcon from '@mui/icons-material/MiscellaneousServices'; // Generic service icon
+import LinkIcon from '@mui/icons-material/Link';
 
 
 import * as containerService from '../services/containerService';
@@ -68,7 +71,7 @@ const ContainerPage: React.FC = () => {
       if (data && data.volume_info) {
         setVolumeInfo(data.volume_info);
       } else {
-        setVolumeInfo(null); // Or a default error state for volume
+        setVolumeInfo(null);
       }
     } catch (err) {
       const apiError = err as ApiError;
@@ -101,7 +104,7 @@ const ContainerPage: React.FC = () => {
     try {
       const response = await action();
       setSuccessMessage(`${successMsgPrefix}: ${response.message}`);
-      setTimeout(() => fetchStatus(false), 2500); // Increased delay for backend
+      setTimeout(() => fetchStatus(false), 3500); // Increased delay for backend services to stabilize
     } catch (err) {
       const apiError = err as ApiError;
       let errorMessage = `Failed to ${actionName} containers.`;
@@ -136,16 +139,28 @@ const ContainerPage: React.FC = () => {
     );
   };
 
-  const getStatusChipColor = (status?: string): "success" | "error" | "default" | "warning" => {
+  const getContainerStatusChipColor = (status?: string): "success" | "error" | "default" | "warning" => {
     if (typeof status !== 'string') return 'default';
     const lowerStatus = status.toLowerCase();
     if (lowerStatus.includes('running')) return 'success';
     if (lowerStatus.includes('up') && (lowerStatus.includes('second') || lowerStatus.includes('minute') || lowerStatus.includes('hour'))) return 'success';
     if (lowerStatus.includes('stopped') || lowerStatus.includes('exited')) return 'error';
     if (lowerStatus.includes('not found') || lowerStatus.includes('not_found')) return 'default';
-    if (lowerStatus.includes('error')) return 'error';
-    return 'warning';
+    if (lowerStatus.includes('error')) return 'error'; // Catches "error (manager init failed)"
+    return 'warning'; // For statuses like 'creating', 'restarting'
   };
+
+  const getServiceStatusChipColor = (serviceStatus?: string | null): "success" | "warning" | "error" | "default" => {
+    if (!serviceStatus || serviceStatus === "N/A") return 'default';
+    const lowerStatus = serviceStatus.toLowerCase();
+
+    if (lowerStatus === 'green' || lowerStatus === 'available') return 'success';
+    if (lowerStatus === 'yellow' || lowerStatus === 'degraded') return 'warning';
+    if (lowerStatus.includes('error') || lowerStatus === 'red' || lowerStatus === 'critical' || lowerStatus === 'unreachable' || lowerStatus === 'timeout' || lowerStatus === 'unavailable') return 'error';
+    if (lowerStatus === 'container not running' || lowerStatus === 'port n/a' || lowerStatus === 'unknown') return 'default';
+    return 'default'; // Default for any other unhandled statuses
+};
+
 
   const formatContainerName = (name?: string): string => {
     if (typeof name !== 'string' || !name) return "Unknown Container";
@@ -155,20 +170,22 @@ const ContainerPage: React.FC = () => {
       .map(word => word.charAt(0).toUpperCase() + word.slice(1))
       .join(' ');
   };
-  
+
   const isAnyActionLoading = Object.values(actionLoading).some(Boolean);
 
   const renderDetailRow = (icon: React.ReactNode, label: string, value?: string | string[] | null) => {
     if (!value || (Array.isArray(value) && value.length === 0)) {
-      return null; // Don't render if value is empty or not present
+      return null;
     }
     return (
       <TableRow>
-        <TableCell sx={{ borderBottom: 'none', py: 0.5, width: 'auto' }}><Stack direction="row" alignItems="center" spacing={1}>{icon} <Typography variant="caption">{label}:</Typography></Stack></TableCell>
+        <TableCell sx={{ borderBottom: 'none', py: 0.5, width: 'auto', pr:1 }}>
+            <Stack direction="row" alignItems="center" spacing={1}>{icon} <Typography variant="caption" fontWeight="medium">{label}:</Typography></Stack>
+        </TableCell>
         <TableCell sx={{ borderBottom: 'none', py: 0.5 }}>
           {Array.isArray(value) ? (
-            <List dense sx={{p:0}}>
-              {value.map((item, idx) => <ListItem key={idx} sx={{p:0}}><Typography variant="caption" color="text.secondary">{item}</Typography></ListItem>)}
+            <List dense sx={{p:0, m:0}}>
+              {value.map((item, idx) => <ListItem key={idx} sx={{p:0, m:0}}><Typography variant="caption" color="text.secondary">{item}</Typography></ListItem>)}
             </List>
           ) : (
             <Typography variant="caption" color="text.secondary">{value}</Typography>
@@ -212,19 +229,18 @@ const ContainerPage: React.FC = () => {
         </Box>
       ) : (
         <Grid container spacing={3}>
-          {/* Container Details */}
           {containerDetails && containerDetails.map((detail) => (
             <Grid item xs={12} md={6} key={detail.name}>
               <Card elevation={3}>
                 <CardContent>
                   <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1} mb={1.5}>
                     <Stack direction="row" alignItems="center" spacing={1}>
-                        <DnsIcon color={getStatusChipColor(detail.status) === 'success' ? 'success' : getStatusChipColor(detail.status) === 'error' ? 'error' : 'action'}/>
+                        <DnsIcon color={getContainerStatusChipColor(detail.status) === 'success' ? 'success' : getContainerStatusChipColor(detail.status) === 'error' ? 'error' : 'action'}/>
                         <Typography variant="h6">{formatContainerName(detail.name)}</Typography>
                     </Stack>
                     <Chip
                       label={detail.status || "N/A"}
-                      color={getStatusChipColor(detail.status)}
+                      color={getContainerStatusChipColor(detail.status)}
                       size="small"
                     />
                   </Stack>
@@ -235,6 +251,42 @@ const ContainerPage: React.FC = () => {
                         {renderDetailRow(<IdIcon fontSize="small"/>, "ID", detail.short_id || detail.container_id?.substring(0,12))}
                         {renderDetailRow(<PortIcon fontSize="small"/>, "Ports", detail.ports)}
                         {renderDetailRow(<MountIcon fontSize="small"/>, "Mounts", detail.mounts)}
+                        <TableRow>
+                            <TableCell sx={{ borderBottom: 'none', py: 0.5, pr:1 }}>
+                                <Stack direction="row" alignItems="center" spacing={1}>
+                                    <ServiceIcon fontSize="small" />
+                                    <Typography variant="caption" fontWeight="medium">Service:</Typography>
+                                </Stack>
+                            </TableCell>
+                            <TableCell sx={{ borderBottom: 'none', py: 0.5 }}>
+                                <Stack direction="row" spacing={1} alignItems="center">
+                                    {detail.service_status && detail.service_status !== "N/A" && (
+                                        <Chip
+                                            label={detail.service_status}
+                                            color={getServiceStatusChipColor(detail.service_status)}
+                                            size="small"
+                                        />
+                                    )}
+                                    {detail.name.toLowerCase().includes('kibana') && detail.service_url && detail.service_status?.toLowerCase() === 'available' && (
+                                        <Button
+                                            component={MuiLink} // Use MuiLink for styling consistency
+                                            href={detail.service_url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            size="small"
+                                            variant="outlined"
+                                            startIcon={<LinkIcon />}
+                                            sx={{textTransform: 'none', fontSize: '0.75rem', py:0.2, px:0.8, lineHeight: 1.5 }}
+                                        >
+                                            Open Kibana
+                                        </Button>
+                                    )}
+                                     {(detail.service_status === "N/A" || !detail.service_status) && (
+                                        <Typography variant="caption" color="text.secondary">N/A</Typography>
+                                     )}
+                                </Stack>
+                            </TableCell>
+                        </TableRow>
                       </TableBody>
                     </Table>
                   </TableContainer>
@@ -243,19 +295,18 @@ const ContainerPage: React.FC = () => {
             </Grid>
           ))}
 
-          {/* Volume Details */}
           {volumeInfo && (
              <Grid item xs={12} md={containerDetails.length % 2 !== 0 ? 6 : 12}>
                 <Card elevation={3}>
                     <CardContent>
                     <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1} mb={1.5}>
                          <Stack direction="row" alignItems="center" spacing={1}>
-                            <StorageIcon color={getStatusChipColor(volumeInfo.status) === 'success' || volumeInfo.status === 'found' ? 'success' : getStatusChipColor(volumeInfo.status) === 'error' ? 'error' : 'action'}/>
+                            <StorageIcon color={getContainerStatusChipColor(volumeInfo.status) === 'success' || volumeInfo.status === 'found' ? 'success' : getContainerStatusChipColor(volumeInfo.status) === 'error' ? 'error' : 'action'}/>
                             <Typography variant="h6">Volume: {volumeInfo.name}</Typography>
                         </Stack>
                         <Chip
                             label={volumeInfo.status || "N/A"}
-                            color={getStatusChipColor(volumeInfo.status === 'found' ? 'running' : volumeInfo.status)} // Map "found" to "running" for color
+                            color={getContainerStatusChipColor(volumeInfo.status === 'found' ? 'running' : volumeInfo.status)}
                             size="small"
                         />
                     </Stack>
@@ -282,7 +333,7 @@ const ContainerPage: React.FC = () => {
            )}
         </Grid>
       )}
-      
+
       {(!containerDetails || containerDetails.length === 0) && !loadingStatus && (
          <Typography color="text.secondary" sx={{textAlign: 'center', my: 3}}>
             No container status information available. Backend might be down or services not started.

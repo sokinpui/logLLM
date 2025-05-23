@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional  # Added Dict, Any, List
 
 import docker
+import requests
 from docker.errors import APIError, NotFound
 
 from .logger import Logger
@@ -177,6 +178,68 @@ class DockerManager(ContainerManager):
             self._logger.error(
                 f"Generic error removing container {container_name}: {e}", exc_info=True
             )
+
+    def ping_elasticsearch(self, url: str) -> bool:
+        """Pings Elasticsearch to check if the service is responsive."""
+        try:
+            # Default timeout is 5 seconds for connect and read.
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()  # Raise an exception for HTTP errors (4xx or 5xx)
+            # A successful GET to the root of ES usually returns cluster info.
+            # For a simple ping, status 200 is enough.
+            self._logger.debug(
+                f"Elasticsearch ping to {url} successful (status {response.status_code})."
+            )
+            return True
+        except requests.exceptions.Timeout:
+            self._logger.warning(f"Elasticsearch ping to {url} timed out.")
+            return False
+        except requests.exceptions.ConnectionError:
+            self._logger.warning(
+                f"Elasticsearch ping to {url} failed (connection error)."
+            )
+            return False
+        except requests.exceptions.RequestException as e:
+            self._logger.warning(f"Elasticsearch ping to {url} failed: {e}")
+            return False
+        except Exception as e:
+            self._logger.error(
+                f"Unexpected error pinging Elasticsearch at {url}: {e}", exc_info=True
+            )
+            return False
+
+    def ping_kibana(self, url: str) -> bool:
+        """Pings Kibana to check if the service is responsive.
+        The URL should typically be the Kibana /api/status endpoint.
+        """
+        try:
+            # Kibana might take a bit longer, especially on first start.
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            # Kibana's /api/status returns JSON with its operational state.
+            # A 200 OK is a good sign of basic reachability.
+            # For a more detailed check:
+            # data = response.json()
+            # if data.get("status", {}).get("overall", {}).get("state") in ["green", "yellow"]:
+            #    return True
+            self._logger.debug(
+                f"Kibana ping to {url} successful (status {response.status_code})."
+            )
+            return True
+        except requests.exceptions.Timeout:
+            self._logger.warning(f"Kibana ping to {url} timed out.")
+            return False
+        except requests.exceptions.ConnectionError:
+            self._logger.warning(f"Kibana ping to {url} failed (connection error).")
+            return False
+        except requests.exceptions.RequestException as e:
+            self._logger.warning(f"Kibana ping to {url} failed: {e}")
+            return False
+        except Exception as e:
+            self._logger.error(
+                f"Unexpected error pinging Kibana at {url}: {e}", exc_info=True
+            )
+            return False
 
     def get_container_details(self, name: str) -> Dict[str, Any]:
         """Gets detailed information of a container by name."""
@@ -393,4 +456,3 @@ class DockerManager(ContainerManager):
                 "is running and configured correctly."
             )
             return None
-

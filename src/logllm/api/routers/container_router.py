@@ -1,3 +1,4 @@
+import requests  # Added for service health checks
 from fastapi import APIRouter, HTTPException
 
 from ...config import config as cfg  # Adjust path if necessary
@@ -171,6 +172,77 @@ async def get_container_services_status():
 
         es_item = ContainerDetailItem(**es_details_dict)
         kbn_item = ContainerDetailItem(**kbn_details_dict)
+
+        # --- Service Health Checks ---
+        # Elasticsearch
+        if (
+            es_item.status and "up" in es_item.status.lower()
+        ):  # Check if container is running
+            es_host_port = cfg.ELASTIC_SEARCH_PORTS.get("9200/tcp")
+            if es_host_port:
+                es_item.service_url = f"http://localhost:{es_host_port}"
+                try:
+                    # Use a timeout for requests
+                    response = requests.get(
+                        f"{es_item.service_url}/_cluster/health", timeout=2
+                    )
+                    if response.status_code == 200:
+                        cluster_health = response.json()
+                        es_item.service_status = cluster_health.get(
+                            "status", "Unknown"
+                        ).capitalize()  # e.g. Green, Yellow, Red
+                    else:
+                        es_item.service_status = f"API Error ({response.status_code})"
+                except requests.exceptions.ConnectionError:
+                    es_item.service_status = "Unreachable"
+                except requests.exceptions.Timeout:
+                    es_item.service_status = "Timeout"
+                except Exception:
+                    es_item.service_status = "Check Error"  # Generic error
+            else:
+                es_item.service_status = "Port N/A"
+        elif es_item.status != "not found":
+            es_item.service_status = "Container Not Running"
+        else:  # 'not found'
+            es_item.service_status = "N/A"
+
+        # Kibana
+        if (
+            kbn_item.status and "up" in kbn_item.status.lower()
+        ):  # Check if container is running
+            kbn_host_port = cfg.KIBANA_PORTS.get("5601/tcp")
+            if kbn_host_port:
+                kbn_item.service_url = f"http://localhost:{kbn_host_port}"
+                try:
+                    response = requests.get(
+                        f"{kbn_item.service_url}/api/status", timeout=3
+                    )
+                    if response.status_code == 200:
+                        kibana_status_data = response.json()
+                        overall_status = (
+                            kibana_status_data.get("status", {})
+                            .get("overall", {})
+                            .get("state", "Unknown")
+                        )
+                        kbn_item.service_status = (
+                            overall_status.capitalize()
+                        )  # e.g. Available, Critical
+                    else:
+                        kbn_item.service_status = f"API Error ({response.status_code})"
+                except requests.exceptions.ConnectionError:
+                    kbn_item.service_status = "Unreachable"
+                except requests.exceptions.Timeout:
+                    kbn_item.service_status = "Timeout"
+                except Exception:
+                    kbn_item.service_status = "Check Error"  # Generic error
+            else:
+                kbn_item.service_status = "Port N/A"
+        elif kbn_item.status != "not found":
+            kbn_item.service_status = "Container Not Running"
+        else:  # 'not found'
+            kbn_item.service_status = "N/A"
+        # --- End Service Health Checks ---
+
         container_details_list.extend([es_item, kbn_item])
 
         # Get volume details
@@ -183,18 +255,22 @@ async def get_container_services_status():
 
     except Exception as e:
         # This catch-all is for unexpected errors during status check
-        es_item = ContainerDetailItem(
-            name=cfg.ELASTIC_SEARCH_CONTAINER_NAME, status=f"error ({str(e)})"
+        es_item_err = ContainerDetailItem(
+            name=cfg.ELASTIC_SEARCH_CONTAINER_NAME,
+            status=f"error ({str(e)})",
+            service_status="Error",
         )
-        kbn_item = ContainerDetailItem(
-            name=cfg.KIBANA_CONTAINER_NAME, status=f"error ({str(e)})"
+        kbn_item_err = ContainerDetailItem(
+            name=cfg.KIBANA_CONTAINER_NAME,
+            status=f"error ({str(e)})",
+            service_status="Error",
         )
-        container_details_list.extend([es_item, kbn_item])
-        volume_details = VolumeDetailItem(
+        container_details_list.extend([es_item_err, kbn_item_err])
+        volume_details_err = VolumeDetailItem(
             name=cfg.DOCKER_VOLUME_NAME, status=f"error ({str(e)})"
         )
         return ContainerStatusResponse(
-            statuses=container_details_list, volume_info=volume_details
+            statuses=container_details_list, volume_info=volume_details_err
         )
 
 
