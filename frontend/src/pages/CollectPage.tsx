@@ -1,5 +1,5 @@
 // frontend/src/pages/CollectPage.tsx
-import React, { useState, useEffect, useCallback } from 'react'; // Added useCallback
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Typography,
   Paper,
@@ -17,7 +17,7 @@ import {
   Grid,
   LinearProgress,
   Chip,
-  Card // Added Card import
+  Card
 } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
 import FolderZipIcon from '@mui/icons-material/FolderZip';
@@ -30,19 +30,76 @@ import * as collectService from '../services/collectService';
 import type { ApiError } from '../types/api';
 import type { DirectoryAnalysisResponse, GroupInfo, TaskStatusResponse } from '../types/collect';
 
-const CollectPage: React.FC = () => {
-  const [serverDirectoryPath, setServerDirectoryPath] = useState<string>('');
+// Local Storage Keys
+const LS_COLLECTOR_PATH = 'logllm_collector_serverDirectoryPath';
+const LS_COLLECTOR_ANALYSIS_RESULT = 'logllm_collector_analysisResult';
+const LS_COLLECTOR_TASK_ID = 'logllm_collector_collectionTaskId';
+const LS_COLLECTOR_COLLECTION_STATUS = 'logllm_collector_collectionStatus';
 
-  const [analysisResult, setAnalysisResult] = useState<DirectoryAnalysisResponse | null>(null);
+
+const CollectPage: React.FC = () => {
+  const [serverDirectoryPath, setServerDirectoryPath] = useState<string>(() => {
+    return localStorage.getItem(LS_COLLECTOR_PATH) || '';
+  });
+
+  const [analysisResult, setAnalysisResult] = useState<DirectoryAnalysisResponse | null>(() => {
+    const storedResult = localStorage.getItem(LS_COLLECTOR_ANALYSIS_RESULT);
+    try {
+      return storedResult ? JSON.parse(storedResult) : null;
+    } catch (e) {
+      console.error("Failed to parse analysisResult from localStorage", e);
+      return null;
+    }
+  });
   const [isAnalyzingPath, setIsAnalyzingPath] = useState<boolean>(false);
 
-  const [collectionTaskId, setCollectionTaskId] = useState<string | null>(null);
-  const [collectionStatus, setCollectionStatus] = useState<TaskStatusResponse | null>(null);
+  const [collectionTaskId, setCollectionTaskId] = useState<string | null>(() => {
+    return localStorage.getItem(LS_COLLECTOR_TASK_ID) || null;
+  });
+  const [collectionStatus, setCollectionStatus] = useState<TaskStatusResponse | null>(() => {
+    const storedStatus = localStorage.getItem(LS_COLLECTOR_COLLECTION_STATUS);
+    try {
+      return storedStatus ? JSON.parse(storedStatus) : null;
+    } catch (e) {
+      console.error("Failed to parse collectionStatus from localStorage", e);
+      return null;
+    }
+  });
   const [isStartingCollection, setIsStartingCollection] = useState<boolean>(false);
   const [isPollingStatus, setIsPollingStatus] = useState<boolean>(false);
 
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  // Save to Local Storage Effects
+  useEffect(() => {
+    localStorage.setItem(LS_COLLECTOR_PATH, serverDirectoryPath);
+  }, [serverDirectoryPath]);
+
+  useEffect(() => {
+    if (analysisResult) {
+      localStorage.setItem(LS_COLLECTOR_ANALYSIS_RESULT, JSON.stringify(analysisResult));
+    } else {
+      localStorage.removeItem(LS_COLLECTOR_ANALYSIS_RESULT);
+    }
+  }, [analysisResult]);
+
+  useEffect(() => {
+    if (collectionTaskId) {
+      localStorage.setItem(LS_COLLECTOR_TASK_ID, collectionTaskId);
+    } else {
+      localStorage.removeItem(LS_COLLECTOR_TASK_ID);
+    }
+  }, [collectionTaskId]);
+
+  useEffect(() => {
+    if (collectionStatus) {
+      localStorage.setItem(LS_COLLECTOR_COLLECTION_STATUS, JSON.stringify(collectionStatus));
+    } else {
+      localStorage.removeItem(LS_COLLECTOR_COLLECTION_STATUS);
+    }
+  }, [collectionStatus]);
+
 
   // Helper to extract task_id from message
   const extractTaskIdFromMessage = (message: string): string | null => {
@@ -51,20 +108,19 @@ const CollectPage: React.FC = () => {
   };
 
 
-  const handleAnalyzePath = async () => {
+  const handleAnalyzePath = useCallback(async () => {
     if (!serverDirectoryPath.trim()) {
       setError('Server directory path cannot be empty.');
       return;
     }
     setIsAnalyzingPath(true);
     setError(null);
-    setSuccessMessage(null); // Clear previous success messages
+    setSuccessMessage(null);
     setAnalysisResult(null);
     setCollectionTaskId(null);
     setCollectionStatus(null);
     setIsStartingCollection(false);
     setIsPollingStatus(false);
-
 
     try {
       const response = await collectService.analyzeServerPathStructure({ directory: serverDirectoryPath });
@@ -88,9 +144,9 @@ const CollectPage: React.FC = () => {
     } finally {
       setIsAnalyzingPath(false);
     }
-  };
+  }, [serverDirectoryPath]);
 
-  const handleStartCollection = async () => {
+  const handleStartCollection = useCallback(async () => {
     if (!analysisResult || analysisResult.error_message || !analysisResult.path_exists ) {
       setError('Cannot start collection. Please analyze a valid directory path first.');
       return;
@@ -106,19 +162,18 @@ const CollectPage: React.FC = () => {
 
     setIsStartingCollection(true);
     setError(null);
-    setSuccessMessage(null); // Clear previous success messages
+    setSuccessMessage(null);
     setCollectionTaskId(null);
     setCollectionStatus(null);
 
     try {
       const response = await collectService.startCollectionFromServerPath({ directory: analysisResult.scanned_path });
-      setSuccessMessage(response.message); // Initial success message
+      setSuccessMessage(response.message);
 
-      const taskId = extractTaskIdFromMessage(response.message); // Extract Task ID
+      const taskId = extractTaskIdFromMessage(response.message);
       if (taskId) {
         setCollectionTaskId(taskId);
-        // Polling will start via useEffect
-      } else if (response.task_id) { // If backend sends it separately
+      } else if (response.task_id) {
         setCollectionTaskId(response.task_id);
       }
       else {
@@ -138,7 +193,7 @@ const CollectPage: React.FC = () => {
       setError(errorMessage);
       setIsStartingCollection(false);
     }
-  };
+  }, [analysisResult]);
 
   // Polling logic for task status
   useEffect(() => {
@@ -158,14 +213,13 @@ const CollectPage: React.FC = () => {
                 setError(`Collection Task Error: ${statusRes.error}`);
                 setSuccessMessage(null);
             } else {
-                // Update success message to reflect completion
                 setSuccessMessage(`Task ${statusRes.task_id.substring(0,8)} Completed: ${statusRes.status} - ${statusRes.progress_detail || ''}`);
             }
           }
         } catch (err) {
           console.error("Failed to fetch task status:", err);
           setError("Failed to fetch task status. Polling may be interrupted.");
-          if (intervalId) clearInterval(intervalId); // Stop polling on error
+          if (intervalId) clearInterval(intervalId);
           setIsPollingStatus(false);
         }
       };
@@ -199,7 +253,6 @@ const CollectPage: React.FC = () => {
           {error}
         </Alert>
       </Collapse>
-      {/* Show success message only if not loading and no error */}
       <Collapse in={!!successMessage && !isLoading && !error}>
         <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccessMessage(null)}>
           {successMessage}
@@ -274,7 +327,6 @@ const CollectPage: React.FC = () => {
         </Card>
       )}
 
-      {/* Render button only if analysis is done and valid */}
       {analysisResult && !analysisResult.error_message && analysisResult.path_exists && !isAnalyzingPath && (
           <Button
             variant="contained"

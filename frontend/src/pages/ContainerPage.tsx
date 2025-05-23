@@ -1,3 +1,4 @@
+// frontend/src/pages/ContainerPage.tsx
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Typography,
@@ -25,7 +26,7 @@ import {
   TableBody,
   TableRow,
   TableCell,
-  Link as MuiLink, // For the Kibana link
+  Link as MuiLink,
 } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
@@ -36,12 +37,14 @@ import DnsIcon from '@mui/icons-material/Dns';
 import IdIcon from '@mui/icons-material/Fingerprint';
 import PortIcon from '@mui/icons-material/SettingsEthernet';
 import MountIcon from '@mui/icons-material/BackupTable';
-import ServiceIcon from '@mui/icons-material/MiscellaneousServices'; // Generic service icon
+import ServiceIcon from '@mui/icons-material/MiscellaneousServices';
 import LinkIcon from '@mui/icons-material/Link';
-
 
 import * as containerService from '../services/containerService';
 import type { ContainerDetailItem, VolumeDetailItem, ApiError } from '../types/api';
+
+// Local Storage Key
+const LS_CONTAINER_REMOVE_ON_STOP = 'logllm_container_removeOnStop';
 
 const ContainerPage: React.FC = () => {
   const [containerDetails, setContainerDetails] = useState<ContainerDetailItem[]>([]);
@@ -54,7 +57,24 @@ const ContainerPage: React.FC = () => {
   }>({});
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [removeOnStop, setRemoveOnStop] = useState<boolean>(false);
+
+  const [removeOnStop, setRemoveOnStop] = useState<boolean>(() => {
+    const storedValue = localStorage.getItem(LS_CONTAINER_REMOVE_ON_STOP);
+    if (storedValue) {
+      try {
+        return JSON.parse(storedValue);
+      } catch (e) {
+        console.error("Failed to parse removeOnStop from localStorage", e);
+        return false;
+      }
+    }
+    return false;
+  });
+
+  // Save removeOnStop to Local Storage
+  useEffect(() => {
+    localStorage.setItem(LS_CONTAINER_REMOVE_ON_STOP, JSON.stringify(removeOnStop));
+  }, [removeOnStop]);
 
   const fetchStatus = useCallback(async (showLoadingSpinner: boolean = true) => {
     if (showLoadingSpinner) setLoadingStatus(true);
@@ -104,7 +124,7 @@ const ContainerPage: React.FC = () => {
     try {
       const response = await action();
       setSuccessMessage(`${successMsgPrefix}: ${response.message}`);
-      setTimeout(() => fetchStatus(false), 3500); // Increased delay for backend services to stabilize
+      setTimeout(() => fetchStatus(false), 3500);
     } catch (err) {
       const apiError = err as ApiError;
       let errorMessage = `Failed to ${actionName} containers.`;
@@ -146,8 +166,8 @@ const ContainerPage: React.FC = () => {
     if (lowerStatus.includes('up') && (lowerStatus.includes('second') || lowerStatus.includes('minute') || lowerStatus.includes('hour'))) return 'success';
     if (lowerStatus.includes('stopped') || lowerStatus.includes('exited')) return 'error';
     if (lowerStatus.includes('not found') || lowerStatus.includes('not_found')) return 'default';
-    if (lowerStatus.includes('error')) return 'error'; // Catches "error (manager init failed)"
-    return 'warning'; // For statuses like 'creating', 'restarting'
+    if (lowerStatus.includes('error')) return 'error';
+    return 'warning';
   };
 
   const getServiceStatusChipColor = (serviceStatus?: string | null): "success" | "warning" | "error" | "default" => {
@@ -158,7 +178,7 @@ const ContainerPage: React.FC = () => {
     if (lowerStatus === 'yellow' || lowerStatus === 'degraded') return 'warning';
     if (lowerStatus.includes('error') || lowerStatus === 'red' || lowerStatus === 'critical' || lowerStatus === 'unreachable' || lowerStatus === 'timeout' || lowerStatus === 'unavailable') return 'error';
     if (lowerStatus === 'container not running' || lowerStatus === 'port n/a' || lowerStatus === 'unknown') return 'default';
-    return 'default'; // Default for any other unhandled statuses
+    return 'default';
 };
 
 
@@ -269,7 +289,7 @@ const ContainerPage: React.FC = () => {
                                     )}
                                     {detail.name.toLowerCase().includes('kibana') && detail.service_url && detail.service_status?.toLowerCase() === 'available' && (
                                         <Button
-                                            component={MuiLink} // Use MuiLink for styling consistency
+                                            component={MuiLink}
                                             href={detail.service_url}
                                             target="_blank"
                                             rel="noopener noreferrer"
