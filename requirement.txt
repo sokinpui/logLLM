@@ -31,3 +31,4 @@ fastapi
 uvicorn
 sentencepiece
 
+python-multipart
