@@ -1,5 +1,4 @@
-// frontend/src/pages/CollectPage.tsx
-import React, { useState, useEffect, useCallback } from 'react'; // Added useCallback
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Typography,
   Paper,
@@ -17,7 +16,7 @@ import {
   Grid,
   LinearProgress,
   Chip,
-  Card // Added Card import
+  Card // Added Card for better layout of analysis results
 } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
 import FolderZipIcon from '@mui/icons-material/FolderZip';
@@ -30,9 +29,13 @@ import * as collectService from '../services/collectService';
 import type { ApiError } from '../types/api';
 import type { DirectoryAnalysisResponse, GroupInfo, TaskStatusResponse } from '../types/collect';
 
+// localStorage keys
+const LS_COLLECT_PATH_KEY = 'logllm_collect_serverDirectoryPath';
+const LS_COLLECT_ANALYSIS_KEY_PREFIX = 'logllm_collect_analysisResult_'; // Appended with path
+const LS_COLLECT_TASK_ID_KEY = 'logllm_collect_collectionTaskId';
+
 const CollectPage: React.FC = () => {
   const [serverDirectoryPath, setServerDirectoryPath] = useState<string>('');
-
   const [analysisResult, setAnalysisResult] = useState<DirectoryAnalysisResponse | null>(null);
   const [isAnalyzingPath, setIsAnalyzingPath] = useState<boolean>(false);
 
@@ -44,11 +47,64 @@ const CollectPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // Helper to extract task_id from message
-  const extractTaskIdFromMessage = (message: string): string | null => {
-    const match = message.match(/Task ID: ([a-f0-9-]+)/i);
-    return match ? match[1] : null;
-  };
+  // Load initial state from localStorage
+  useEffect(() => {
+    const savedPath = localStorage.getItem(LS_COLLECT_PATH_KEY);
+    if (savedPath) {
+      setServerDirectoryPath(savedPath);
+      // Try to load analysis for this path
+      const savedAnalysis = localStorage.getItem(LS_COLLECT_ANALYSIS_KEY_PREFIX + savedPath);
+      if (savedAnalysis) {
+        try {
+          const parsedAnalysis = JSON.parse(savedAnalysis);
+          // Basic validation of stored analysis
+          if (parsedAnalysis && parsedAnalysis.scanned_path === savedPath) {
+             setAnalysisResult(parsedAnalysis);
+          } else {
+            localStorage.removeItem(LS_COLLECT_ANALYSIS_KEY_PREFIX + savedPath); // Clean up invalid stored data
+          }
+        } catch (e) {
+          console.error("Failed to parse saved analysis result:", e);
+          localStorage.removeItem(LS_COLLECT_ANALYSIS_KEY_PREFIX + savedPath);
+        }
+      }
+    }
+
+    const savedTaskId = localStorage.getItem(LS_COLLECT_TASK_ID_KEY);
+    if (savedTaskId) {
+      setCollectionTaskId(savedTaskId);
+      // Polling will be triggered by useEffect watching collectionTaskId
+    }
+  }, []);
+
+  // Save serverDirectoryPath to localStorage
+  useEffect(() => {
+    if (serverDirectoryPath) {
+      localStorage.setItem(LS_COLLECT_PATH_KEY, serverDirectoryPath);
+    } else {
+      // If path is cleared, remove it and its associated analysis
+      localStorage.removeItem(LS_COLLECT_PATH_KEY);
+      const oldPath = localStorage.getItem(LS_COLLECT_PATH_KEY); // Get previous path to remove its analysis
+      if (oldPath) localStorage.removeItem(LS_COLLECT_ANALYSIS_KEY_PREFIX + oldPath);
+    }
+  }, [serverDirectoryPath]);
+
+  // Save analysisResult to localStorage, keyed by path
+  useEffect(() => {
+    if (analysisResult && analysisResult.scanned_path) {
+      localStorage.setItem(LS_COLLECT_ANALYSIS_KEY_PREFIX + analysisResult.scanned_path, JSON.stringify(analysisResult));
+    }
+    // No explicit removal here, old analysis for different paths remain until path is reused or cleared
+  }, [analysisResult]);
+
+  // Save collectionTaskId to localStorage
+  useEffect(() => {
+    if (collectionTaskId) {
+      localStorage.setItem(LS_COLLECT_TASK_ID_KEY, collectionTaskId);
+    } else {
+      localStorage.removeItem(LS_COLLECT_TASK_ID_KEY);
+    }
+  }, [collectionTaskId]);
 
 
   const handleAnalyzePath = async () => {
@@ -58,17 +114,16 @@ const CollectPage: React.FC = () => {
     }
     setIsAnalyzingPath(true);
     setError(null);
-    setSuccessMessage(null); // Clear previous success messages
-    setAnalysisResult(null);
-    setCollectionTaskId(null);
+    setSuccessMessage(null);
+    setAnalysisResult(null); // Clear previous analysis
+    setCollectionTaskId(null); // Clear previous task
     setCollectionStatus(null);
     setIsStartingCollection(false);
     setIsPollingStatus(false);
 
-
     try {
       const response = await collectService.analyzeServerPathStructure({ directory: serverDirectoryPath });
-      setAnalysisResult(response);
+      setAnalysisResult(response); // This will trigger the useEffect to save it
       if (response.error_message) {
         setError(`Analysis Error: ${response.error_message}`);
       } else if (!response.path_exists) {
@@ -106,23 +161,17 @@ const CollectPage: React.FC = () => {
 
     setIsStartingCollection(true);
     setError(null);
-    setSuccessMessage(null); // Clear previous success messages
-    setCollectionTaskId(null);
+    setSuccessMessage(null);
+    setCollectionTaskId(null); // Clear previous task before starting new one
     setCollectionStatus(null);
 
     try {
       const response = await collectService.startCollectionFromServerPath({ directory: analysisResult.scanned_path });
-      setSuccessMessage(response.message); // Initial success message
-
-      const taskId = extractTaskIdFromMessage(response.message); // Extract Task ID
-      if (taskId) {
-        setCollectionTaskId(taskId);
-        // Polling will start via useEffect
-      } else if (response.task_id) { // If backend sends it separately
-        setCollectionTaskId(response.task_id);
-      }
-      else {
-        setError("Collection initiated but no Task ID received in message.");
+      setSuccessMessage(response.message);
+      if (response.task_id) {
+        setCollectionTaskId(response.task_id); // This will trigger useEffect for saving and polling
+      } else {
+        setError("Collection initiated but no Task ID received.");
         setIsStartingCollection(false);
       }
     } catch (err) {
@@ -158,15 +207,21 @@ const CollectPage: React.FC = () => {
                 setError(`Collection Task Error: ${statusRes.error}`);
                 setSuccessMessage(null);
             } else {
-                // Update success message to reflect completion
-                setSuccessMessage(`Task ${statusRes.task_id.substring(0,8)} Completed: ${statusRes.status} - ${statusRes.progress_detail || ''}`);
+                setSuccessMessage(prev => `${prev || 'Collection task started.'} Task ${statusRes.task_id.substring(0,8)} Completed: ${statusRes.status} - ${statusRes.progress_detail || ''}`);
             }
+            // Potentially clear task ID from localStorage after some time or on user action
+            // For now, it remains, so refresh will try to poll a completed task.
           }
         } catch (err) {
           console.error("Failed to fetch task status:", err);
-          setError("Failed to fetch task status. Polling may be interrupted.");
-          if (intervalId) clearInterval(intervalId); // Stop polling on error
-          setIsPollingStatus(false);
+          // If task ID is not found (404), it means it's old or invalid, clear it
+          if ((err as any)?.response?.status === 404 || (err as Error).message?.toLowerCase().includes('not found')) {
+            setError(`Task ID ${collectionTaskId.substring(0,8)} not found. It might be an old task. Clearing.`);
+            setCollectionTaskId(null);
+            setCollectionStatus(null);
+            if (intervalId) clearInterval(intervalId);
+            setIsPollingStatus(false);
+          }
         }
       };
 
@@ -179,10 +234,36 @@ const CollectPage: React.FC = () => {
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
-  }, [collectionTaskId, collectionStatus?.completed]);
+  }, [collectionTaskId, collectionStatus?.completed]); // Added collectionStatus?.completed to dependencies
 
 
   const isLoading = isAnalyzingPath || isStartingCollection || isPollingStatus;
+
+  const handlePathInputChange = (newPath: string) => {
+    setServerDirectoryPath(newPath);
+    // If user changes path, clear analysis and task details for the *old* path
+    if (newPath !== serverDirectoryPath) {
+        setAnalysisResult(null);
+        setCollectionTaskId(null);
+        setCollectionStatus(null);
+        setError(null);
+        // Attempt to load analysis if there's a saved one for the new path
+        const savedAnalysisForNewPath = localStorage.getItem(LS_COLLECT_ANALYSIS_KEY_PREFIX + newPath);
+        if (savedAnalysisForNewPath) {
+            try {
+                const parsedAnalysis = JSON.parse(savedAnalysisForNewPath);
+                 if (parsedAnalysis && parsedAnalysis.scanned_path === newPath) {
+                    setAnalysisResult(parsedAnalysis);
+                 } else {
+                    localStorage.removeItem(LS_COLLECT_ANALYSIS_KEY_PREFIX + newPath);
+                 }
+            } catch (e) {
+                localStorage.removeItem(LS_COLLECT_ANALYSIS_KEY_PREFIX + newPath);
+            }
+        }
+    }
+  };
+
 
   return (
     <Paper sx={{ p: 3, maxWidth: 800, margin: 'auto' }}>
@@ -191,7 +272,7 @@ const CollectPage: React.FC = () => {
       </Typography>
       <Typography variant="body2" color="textSecondary" sx={{ textAlign: 'center', mb: 3 }}>
         Enter an absolute path on the server. The system will analyze its structure,
-        then you can initiate collection. Backend progress will be shown.
+        then you can initiate collection. Path and task state are remembered across refreshes.
       </Typography>
 
       <Collapse in={!!error}>
@@ -199,8 +280,7 @@ const CollectPage: React.FC = () => {
           {error}
         </Alert>
       </Collapse>
-      {/* Show success message only if not loading and no error */}
-      <Collapse in={!!successMessage && !isLoading && !error}>
+      <Collapse in={!!successMessage && (!isLoading || (collectionStatus?.completed && !collectionStatus?.error))}>
         <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccessMessage(null)}>
           {successMessage}
         </Alert>
@@ -212,14 +292,7 @@ const CollectPage: React.FC = () => {
           variant="outlined"
           fullWidth
           value={serverDirectoryPath}
-          onChange={(e) => {
-            setServerDirectoryPath(e.target.value);
-            setAnalysisResult(null);
-            setCollectionTaskId(null);
-            setCollectionStatus(null);
-            setError(null);
-            // setSuccessMessage(null); // Keep or clear based on preference
-          }}
+          onChange={(e) => handlePathInputChange(e.target.value)}
           disabled={isLoading}
           sx={{flexGrow: 1}}
           helperText="e.g., /var/log/my_app_logs or C:\logs\my_app"
@@ -274,7 +347,6 @@ const CollectPage: React.FC = () => {
         </Card>
       )}
 
-      {/* Render button only if analysis is done and valid */}
       {analysisResult && !analysisResult.error_message && analysisResult.path_exists && !isAnalyzingPath && (
           <Button
             variant="contained"
@@ -282,19 +354,11 @@ const CollectPage: React.FC = () => {
             fullWidth
             onClick={handleStartCollection}
             disabled={isLoading || analysisResult.root_files_present || analysisResult.identified_groups.length === 0}
-            startIcon={(isStartingCollection || (isPollingStatus && !collectionStatus?.completed)) ? <CircularProgress size={20} color="inherit"/> : <PlayCircleOutlineIcon />}
+            startIcon={isStartingCollection || isPollingStatus ? <CircularProgress size={20} color="inherit"/> : <PlayCircleOutlineIcon />}
             size="large"
             sx={{mt:1, mb:2}}
           >
-            {isStartingCollection
-              ? 'Initiating...'
-              : (isPollingStatus && !collectionStatus?.completed)
-              ? `Collecting... (${collectionStatus?.status || 'Fetching Status'})`
-              : (collectionStatus?.completed && !collectionStatus.error)
-              ? 'Collection Succeeded'
-              : (collectionStatus?.completed && collectionStatus.error)
-              ? 'Collection Failed (Retry?)'
-              : 'Start Collection'}
+            {isStartingCollection ? 'Initiating...' : isPollingStatus && !collectionStatus?.completed ? `Collecting... (${collectionStatus?.status || 'Fetching Status'})` : 'Start Collection'}
           </Button>
       )}
 
@@ -313,7 +377,9 @@ const CollectPage: React.FC = () => {
                   />
                 </Box>
                 <Box sx={{ minWidth: 35 }}>
-                  <Typography variant="body2" color="text.secondary">{`${collectionStatus.completed ? 100 : (collectionStatus.status === "Processing" ? 50 : (collectionStatus.status === "Scanning directory" ? 25 : 10))}%`}</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {`${collectionStatus.completed ? 100 : (collectionStatus.status === "Processing" ? 50 : (collectionStatus.status === "Scanning directory" ? 25 : 10))}%`}
+                  </Typography>
                 </Box>
               </Box>
               <Typography variant="body2">Status: <strong>{collectionStatus.status}</strong></Typography>
@@ -324,10 +390,11 @@ const CollectPage: React.FC = () => {
               }
             </>
           ) : (
-            <Box sx={{display:'flex', alignItems:'center', gap:1}}> <CircularProgress size={16}/> <Typography variant="body2">Fetching initial status...</Typography> </Box>
+            <Box sx={{display:'flex', alignItems:'center', gap:1}}> <CircularProgress size={16}/> <Typography variant="body2">Fetching initial status for task {collectionTaskId.substring(0,8)}...</Typography> </Box>
           )}
         </Box>
       )}
+
 
       <Divider sx={{ my: 3 }} />
       <Typography variant="body2" color="textSecondary" sx={{ mt: 2, textAlign: 'center' }}>
