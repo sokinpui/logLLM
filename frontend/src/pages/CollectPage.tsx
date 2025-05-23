@@ -13,11 +13,12 @@ import {
   ListItemIcon,
   ListItemText,
   Divider,
-  Grid,
+  Grid, // Keep Grid if you plan to use it, otherwise remove
   LinearProgress,
   Chip,
+  Card, // Added Card import as it's used
 } from '@mui/material';
-import SendIcon from '@mui/icons-material/Send'; // Replaced with PlayCircleOutline for start
+// import SendIcon from '@mui/icons-material/Send'; // Replaced with PlayCircleOutline for start
 import FolderZipIcon from '@mui/icons-material/FolderZip';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
@@ -103,10 +104,10 @@ const CollectPage: React.FC = () => {
 
     try {
       const response = await collectService.startCollectionFromServerPath({ directory: analysisResult.scanned_path });
-      setSuccessMessage(response.message);
+      setSuccessMessage(response.message); // Initial success message (e.g., "Collection initiated...")
       if (response.task_id) {
         setCollectionTaskId(response.task_id);
-        // Polling will start via useEffect, no need to set isCollecting false immediately
+        // Polling will start via useEffect, no need to set isStartingCollection false here
       } else {
         // Should not happen if backend sends task_id
         setError("Collection initiated but no Task ID received.");
@@ -143,20 +144,21 @@ const CollectPage: React.FC = () => {
             setIsPollingStatus(false);
             if(statusRes.error) {
                 setError(`Collection Task Error: ${statusRes.error}`);
-                setSuccessMessage(null); // Clear initial success message
+                setSuccessMessage(null); // Clear any initial success message if task completes with error
             } else {
-                // Keep the initial success message from starting the task, or update it
-                setSuccessMessage(prev => `${prev} Task ${statusRes.task_id.substring(0,8)} Completed: ${statusRes.status} - ${statusRes.progress_detail || ''}`);
+                // Set a clear success message for task completion
+                setSuccessMessage(`Task ${statusRes.task_id.substring(0,8)} completed successfully. Status: ${statusRes.status}. ${statusRes.progress_detail || ''}`);
             }
           }
         } catch (err) {
           console.error("Failed to fetch task status:", err);
           // Optionally handle repeated fetch errors, e.g., stop polling after X failures
+          // If polling fails many times, you might want to set an error and stop.
         }
       };
 
       poll(); // Initial fetch
-      intervalId = setInterval(poll, 3000);
+      intervalId = setInterval(poll, 3000); // Poll every 3 seconds
     } else if (collectionStatus?.completed) {
         setIsPollingStatus(false); // Ensure polling state is false when completed
         setIsStartingCollection(false);
@@ -164,7 +166,7 @@ const CollectPage: React.FC = () => {
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
-  }, [collectionTaskId, collectionStatus?.completed]);
+  }, [collectionTaskId, collectionStatus?.completed]); // Rerun effect if taskId changes or task completion status changes
 
 
   const isLoading = isAnalyzingPath || isStartingCollection || isPollingStatus;
@@ -175,7 +177,6 @@ const CollectPage: React.FC = () => {
         Collect Logs from Server
       </Typography>
       <Typography variant="body2" color="textSecondary" sx={{ textAlign: 'center', mb: 3 }}>
-        Enter an absolute path on the server. The system will analyze its structure,
         then you can initiate collection. Backend progress will be shown.
       </Typography>
 
@@ -184,11 +185,18 @@ const CollectPage: React.FC = () => {
           {error}
         </Alert>
       </Collapse>
-      <Collapse in={!!successMessage && !isLoading}>
+      <Collapse in={!!successMessage && !isLoading && (!collectionStatus || collectionStatus.completed)}>
         <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccessMessage(null)}>
           {successMessage}
         </Alert>
       </Collapse>
+       {/* Show initial success message ("Collection initiated...") even while loading/polling, but hide if there's an error */}
+      <Collapse in={!!successMessage && isLoading && !error && collectionTaskId && !collectionStatus?.completed}>
+        <Alert severity="info" sx={{ mb: 2 }} onClose={() => setSuccessMessage(null)}>
+            {successMessage}
+        </Alert>
+      </Collapse>
+
 
       <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2, mb: 2 }}>
         <TextField
@@ -203,7 +211,8 @@ const CollectPage: React.FC = () => {
             setCollectionTaskId(null);
             setCollectionStatus(null);
             setError(null);
-            // setSuccessMessage(null); // Keep success from previous completed task if desired
+            // Keep success from previous completed task if desired, or clear:
+            // setSuccessMessage(null);
           }}
           disabled={isLoading}
           sx={{flexGrow: 1}}
@@ -223,7 +232,10 @@ const CollectPage: React.FC = () => {
       {analysisResult && !isAnalyzingPath && (
         <Card variant="outlined" sx={{ mb: 2, p: 2 }}>
             <Typography variant="h6" gutterBottom>
-                Analysis for: <Chip label={analysisResult.scanned_path} size="small" onDelete={analysisResult.error_message || !analysisResult.path_exists ? ()=>setAnalysisResult(null) : undefined }/>
+                Analysis for: <Chip label={analysisResult.scanned_path} size="small"
+                                  onDelete={(analysisResult.error_message || !analysisResult.path_exists) ? ()=>setAnalysisResult(null) : undefined }
+                                  deleteIcon={ (analysisResult.error_message || !analysisResult.path_exists) ? undefined : <div style={{display:"none"}} /> } // Hide delete icon visually if not deletable
+                                  />
             </Typography>
           {!analysisResult.path_exists ? (
             <Alert severity="error">Path does not exist on server.</Alert>
@@ -284,12 +296,12 @@ const CollectPage: React.FC = () => {
               <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
                 <Box sx={{ width: '100%', mr: 1 }}>
                    <LinearProgress
-                    variant={collectionStatus.completed || collectionStatus.status === "Initializing" || collectionStatus.status === "Pending" ? "determinate" : "indeterminate" }
-                    value={collectionStatus.completed ? 100 : (collectionStatus.status === "Processing" ? 50 : 10)} // Simple progress simulation
+                    variant={(collectionStatus.completed || ["Initializing", "Pending", "Scanning directory"].includes(collectionStatus.status)) ? "determinate" : "indeterminate" }
+                    value={collectionStatus.completed ? 100 : (collectionStatus.status === "Processing" ? 50 : (["Initializing", "Pending", "Scanning directory"].includes(collectionStatus.status) ? 10 : 0))}
                   />
                 </Box>
                 <Box sx={{ minWidth: 35 }}>
-                  <Typography variant="body2" color="text.secondary">{`${collectionStatus.completed ? 100 : (collectionStatus.status === "Processing" ? 50 : 10)}%`}</Typography>
+                  <Typography variant="body2" color="text.secondary">{`${collectionStatus.completed ? 100 : (collectionStatus.status === "Processing" ? 50 : (["Initializing", "Pending", "Scanning directory"].includes(collectionStatus.status) ? 10 : 0))}%`}</Typography>
                 </Box>
               </Box>
               <Typography variant="body2">Status: <strong>{collectionStatus.status}</strong></Typography>
