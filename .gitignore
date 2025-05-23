@@ -37,8 +37,6 @@ pip-wheel-metadata/
 *.whl
 
 # Common data/model directories
-models/
-!src/logllm/api/models
 
 # IDE and editor files
 .idea/
