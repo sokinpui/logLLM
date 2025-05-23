@@ -32,7 +32,7 @@ import {
   listEsParseResults,
   listEsParseGroups,
 } from '../services/esParseService';
-import {
+import type {
   EsParseRunRequest,
   EsParseResultItem,
   TaskStatusResponse,
