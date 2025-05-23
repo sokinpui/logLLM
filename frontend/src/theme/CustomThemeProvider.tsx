@@ -21,7 +21,7 @@ interface ThemeContextType {
 
 export const ThemeContext = createContext<ThemeContextType>({
   toggleTheme: () => {},
-  mode: 'dark', // Default PaletteMode
+  mode: 'light', // Default PaletteMode
 });
 
 interface CustomThemeProviderProps {
@@ -29,7 +29,7 @@ interface CustomThemeProviderProps {
 }
 
 export const CustomThemeProvider: React.FC<CustomThemeProviderProps> = ({ children }) => {
-  const [mode, setMode] = useState<PaletteMode>('dark'); // Default to dark mode
+  const [mode, setMode] = useState<PaletteMode>('light'); // Default to dark mode
 
   const themeToggle = useMemo(
     () => ({

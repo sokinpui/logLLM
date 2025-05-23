@@ -1,3 +1,4 @@
+// frontend/src/components/sidebar/Sidebar.tsx
 import React from 'react';
 import {
   Drawer,
@@ -10,18 +11,18 @@ import {
   useTheme,
   IconButton,
   Divider,
-  Tooltip, // Import Tooltip
+  Tooltip,
 } from '@mui/material';
-import { Link, useLocation } from 'react-router-dom'; // Import useLocation
+import { Link, useLocation } from 'react-router-dom';
 import DashboardIcon from '@mui/icons-material/Dashboard';
-import StorageIcon from '@mui/icons-material/Storage'; // For Container/DB
-import FolderOpenIcon from '@mui/icons-material/FolderOpen'; // For Collect
-import TextFieldsIcon from '@mui/icons-material/TextFields'; // For Parsers
-import ManageSearchIcon from '@mui/icons-material/ManageSearch'; // For ES-Parse
-import PlaylistAddCheckIcon from '@mui/icons-material/PlaylistAddCheck'; // For Prompts Manager
-import TimerIcon from '@mui/icons-material/Timer'; // For Normalize-TS
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'; // For Analyze Errors
-// import MenuIcon from '@mui/icons-material/Menu'; // Not used directly for toggle here, MainLayout handles it
+import StorageIcon from '@mui/icons-material/Storage';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import TextFieldsIcon from '@mui/icons-material/TextFields';
+import ManageSearchIcon from '@mui/icons-material/ManageSearch';
+import PlaylistAddCheckIcon from '@mui/icons-material/PlaylistAddCheck';
+import TimerIcon from '@mui/icons-material/Timer';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import GroupWorkIcon from '@mui/icons-material/GroupWork';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 
@@ -83,6 +84,7 @@ const sidebarItems: SidebarItem[] = [
   { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
   { text: 'Container Mgmt', icon: <StorageIcon />, path: '/container' },
   { text: 'Collect Logs', icon: <FolderOpenIcon />, path: '/collect' },
+  { text: 'Group Info', icon: <GroupWorkIcon />, path: '/groups' },
   { text: 'File Parser', icon: <TextFieldsIcon />, path: '/file-parser' },
   { text: 'ES Parser', icon: <ManageSearchIcon />, path: '/es-parser' },
   { text: 'Normalize TS', icon: <TimerIcon />, path: '/normalize-ts' },
@@ -98,13 +100,12 @@ interface SidebarProps {
 
 const Sidebar: React.FC<SidebarProps> = ({ open, handleDrawerClose, handleDrawerOpen }) => {
   const theme = useTheme();
-  const location = useLocation(); // For active route styling
+  const location = useLocation();
 
   return (
     <StyledDrawer variant="permanent" open={open}>
       <DrawerHeader>
         <IconButton onClick={open ? handleDrawerClose : handleDrawerOpen}>
-          {/* Toggle icon based on open state, consistent with drawer behavior */}
           {open ? (theme.direction === 'rtl' ? <ChevronRightIcon /> : <ChevronLeftIcon />) : (theme.direction === 'rtl' ? <ChevronLeftIcon /> : <ChevronRightIcon />) }
         </IconButton>
       </DrawerHeader>
@@ -116,12 +117,12 @@ const Sidebar: React.FC<SidebarProps> = ({ open, handleDrawerClose, handleDrawer
               key={item.text}
               component={Link}
               to={item.path}
-              selected={location.pathname === item.path} // Active route styling
+              selected={location.pathname === item.path}
               sx={{
                 minHeight: 48,
                 justifyContent: open ? 'initial' : 'center',
                 px: 2.5,
-                '&.Mui-selected': { // Styles for selected item
+                '&.Mui-selected': {
                   backgroundColor: theme.palette.action.selected,
                   '&:hover': {
                     backgroundColor: theme.palette.action.hover,
@@ -134,7 +135,7 @@ const Sidebar: React.FC<SidebarProps> = ({ open, handleDrawerClose, handleDrawer
                   minWidth: 0,
                   mr: open ? 3 : 'auto',
                   justifyContent: 'center',
-                  color: location.pathname === item.path ? theme.palette.primary.main : 'inherit', // Icon color for active route
+                  color: location.pathname === item.path ? theme.palette.primary.main : 'inherit',
                 }}
               >
                 {item.icon}
@@ -143,7 +144,7 @@ const Sidebar: React.FC<SidebarProps> = ({ open, handleDrawerClose, handleDrawer
                 primary={item.text}
                 sx={{
                   opacity: open ? 1 : 0,
-                  color: location.pathname === item.path ? theme.palette.primary.main : 'inherit', // Text color for active route
+                  color: location.pathname === item.path ? theme.palette.primary.main : 'inherit',
                 }}
               />
             </ListItemButton>

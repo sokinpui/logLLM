@@ -1,4 +1,4 @@
-// --- Update: frontend/src/routes/AppRoutes.tsx ---
+// frontend/src/routes/AppRoutes.tsx
 import React from 'react';
 import { Routes, Route } from 'react-router-dom';
 import MainLayout from '../layouts/MainLayout';
@@ -7,8 +7,8 @@ import MainLayout from '../layouts/MainLayout';
 import DashboardPage from '../pages/DashboardPage';
 import AnalyzeErrorsPage from '../pages/AnalyzeErrorsPage';
 import CollectPage from '../pages/CollectPage';
-// Ensure these are uncommented and the files exist in src/pages/
 import ContainerPage from '../pages/ContainerPage';
+import GroupInfoPage from '../pages/GroupInfoPage'; // Added
 import EsParsePage from '../pages/EsParsePage';
 import FileParsePage from '../pages/FileParsePage';
 import NormalizeTsPage from '../pages/NormalizeTsPage';
@@ -23,11 +23,12 @@ const AppRoutes: React.FC = () => {
         <Route path="/analyze-errors" element={<AnalyzeErrorsPage />} />
         <Route path="/collect" element={<CollectPage />} />
         <Route path="/container" element={<ContainerPage />} />
+        <Route path="/groups" element={<GroupInfoPage />} />
         <Route path="/es-parser" element={<EsParsePage />} />
         <Route path="/file-parser" element={<FileParsePage />} />
         <Route path="/normalize-ts" element={<NormalizeTsPage />} />
         <Route path="/prompts-manager" element={<PromptsManagerPage />} />
-        <Route path="*" element={<NotFoundPage />} /> {/* Catch-all for 404 */}
+        <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>
   );
