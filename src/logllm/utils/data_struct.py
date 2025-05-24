@@ -22,16 +22,7 @@ class LineOfLogFile(BaseData):
     line_number: int  # 0-indexed line number in the file
     name: str  # Full path of the log file
     id: str  # Stable ID of the LogFile (hash of its path)
-    timestamp: datetime  # Timestamp of when this line was processed/inserted
-
-    def to_dict(self):
-        data = asdict(self)
-        # Convert datetime objects to strings
-        if isinstance(data["timestamp"], datetime):
-            data["timestamp"] = data[
-                "timestamp"
-            ].isoformat()  # Convert to ISO 8601 format
-        return data
+    # ingestion_timestamp: datetime  # Timestamp of when this line was processed/inserted
 
 
 @dataclass

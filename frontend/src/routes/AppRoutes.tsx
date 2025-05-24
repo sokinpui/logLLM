@@ -8,11 +8,12 @@ import DashboardPage from '../pages/DashboardPage';
 import AnalyzeErrorsPage from '../pages/AnalyzeErrorsPage';
 import CollectPage from '../pages/CollectPage';
 import ContainerPage from '../pages/ContainerPage';
-import GroupInfoPage from '../pages/GroupInfoPage'; // Added
+import GroupInfoPage from '../pages/GroupInfoPage';
 import EsParsePage from '../pages/EsParsePage';
 import FileParsePage from '../pages/FileParsePage';
 import NormalizeTsPage from '../pages/NormalizeTsPage';
 import PromptsManagerPage from '../pages/PromptsManagerPage';
+import StaticGrokParserPage from '../pages/StaticGrokParserPage'; // ADDED
 import NotFoundPage from '../pages/NotFoundPage';
 
 const AppRoutes: React.FC = () => {
@@ -25,6 +26,7 @@ const AppRoutes: React.FC = () => {
         <Route path="/container" element={<ContainerPage />} />
         <Route path="/groups" element={<GroupInfoPage />} />
         <Route path="/es-parser" element={<EsParsePage />} />
+        <Route path="/static-grok-parser" element={<StaticGrokParserPage />} />
         <Route path="/file-parser" element={<FileParsePage />} />
         <Route path="/normalize-ts" element={<NormalizeTsPage />} />
         <Route path="/prompts-manager" element={<PromptsManagerPage />} />

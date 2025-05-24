@@ -1,0 +1,39 @@
+
+apache:
+  name: "Apache HTTP Server Error Log (Common)" # Or whatever name you have
+  grok_pattern: |-
+    \[%{DAY:day} %{MONTH:month} %{MONTHDAY:monthday} %{TIME:time} %{YEAR:year}\] \[%{LOGLEVEL:loglevel}\](?: \[client %{IP:client}\])?%{GREEDYDATA:message}
+
+  derived_fields:
+     timestamp: "{day} {month} {monthday} {time} {year}"
+
+hadoop_java_common:
+  name: "Hadoop (HDFS, YARN, MapReduce - Common Java Log Format)"
+  grok_pattern: |-
+    %{TIMESTAMP_ISO8601:timestamp} %{LOGLEVEL:loglevel}\s+\[%{DATA:thread_name}\]\s+%{JAVACLASS:logger_name}:\s+%{GREEDYDATA:message}
+
+openstack_common:
+  name: "OpenStack Services (Common Format)"
+  grok_pattern: |-
+    %{DATA:log_file_info} %{TIMESTAMP_ISO8601:event_timestamp} %{INT:pid} %{LOGLEVEL:loglevel} %{NOTSPACE:module} (?:(?<openstack_context>(?:\[.*?\]\s*)+))?%{GREEDYDATA:message}
+  notes: "Common pattern, but can vary between OpenStack services and versions."
+
+zookeeper:
+  name: "ZooKeeper"
+  grok_pattern: |-
+    %{TIMESTAMP_ISO8601:timestamp} - %{LOGLEVEL:loglevel}\s+\[%{DATA:thread_info}\]\s+-\s+%{GREEDYDATA:message}
+
+
+ssh_daemon_log:
+  name: "SSH Daemon Log (sshd)"
+  grok_pattern: |-
+    %{SYSLOGTIMESTAMP:timestamp} %{HOSTNAME:hostname} sshd\[%{INT:pid}\]: %{GREEDYDATA:ssh_message}
+  notes: "This is a general syslog wrapper. The 'ssh_message' field needs specific parsing using sub-patterns like those in 'auth_log_secure' (sshd_accepted, sshd_failed). This pattern is useful if SSHD logs to a separate file but still uses a syslog-like header."
+
+
+
+hpc:
+  name: "HPC Generic Application Output (stdout/stderr)"
+  grok_pattern: |-
+    %{INT:log_id} %{NOTSPACE:source_component} %{NOTSPACE:sub_component_type} %{NOTSPACE:event_category} %{NUMBER:timestamp} %{INT:event_value} %{GREEDYDATA:message}
+  notes: "This is a *very* generic pattern for applications running on HPC clusters that might write to stdout/stderr, which then gets captured in job output files. The 'application_message' field will almost certainly need custom parsing based on the specific application's log format. Useful as a starting point if applications have some minimal structured output."

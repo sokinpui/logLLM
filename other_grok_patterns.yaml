@@ -1,0 +1,239 @@
+# Grok Patterns for Various Log Types
+# grok_patterns.yaml
+
+# --- Core System & Security Logs ---
+# core_system_and_security:
+# syslog_rsyslog:
+#   name: "Syslog / Rsyslog (Common Format)"
+#   grok_pattern: |-
+#     ^%{SYSLOGTIMESTAMP:timestamp} (?:%{SYSLOGFACILITY} )?%{HOSTNAME:hostname} %{PROG:process_name}(?:\[%{POSINT:pid}\])?: %{GREEDYDATA:message}$
+#   notes: "Handles optional facility and PID. The 'message' field often needs further parsing based on the actual process_name."
+#
+# journald_text:
+#   name: "journald (Text Output via journalctl)"
+#   grok_pattern: |-
+#     ^%{TIMESTAMP_ISO8601:timestamp} %{HOSTNAME:hostname} %{PROG:process_name}(?:\[%{NUMBER:pid}\])?: %{GREEDYDATA:message}$
+#   notes: "Assumes ISO8601 timestamp at the beginning from 'journalctl -o short-iso' or similar."
+#
+# dmesg:
+#   name: "dmesg (Kernel Ring Buffer)"
+#   grok_pattern: |-
+#     ^\[\s*%{NUMBER:kernel_timestamp:float}\]\s*%{GREEDYDATA:message}$
+#   notes: "Captures kernel timestamp (seconds since boot) and message."
+#
+# auth_log_secure:
+#   name: "auth.log / secure (Base Syslog Format)"
+#   grok_pattern: |-
+#     ^%{SYSLOGTIMESTAMP:timestamp} (?:%{SYSLOGFACILITY} )?%{HOSTNAME:hostname} %{PROG:process_name}(?:\[%{POSINT:pid}\])?: %{GREEDYDATA:auth_message}$
+#   notes: "This is the base pattern. The 'auth_message' field needs specific parsing."
+#   sub_patterns:
+#     sshd_accepted: 'Accepted %{WORD:auth_method} for %{USER:user} from %{IP:source_ip} port %{POSINT:source_port} ssh2(?:[:] %{DATA:ssh_key_type} %{DATA:ssh_key_fingerprint})?'
+#     sshd_failed: 'Failed %{WORD:auth_method} for (?:invalid user )?%{DATA:user} from %{IP:source_ip} port %{POSINT:source_port} ssh2(?:.*)$'
+#     sudo: '%{USER:sudo_user} : TTY=%{TTY:tty} ; PWD=%{PATH:pwd} ; USER=%{USER:run_as_user} ; COMMAND=%{GREEDYDATA:command}'
+#     pam_unix: 'pam_unix\((?<pam_module>[^:]+):(?<pam_hook>[^\)]+)\): session %{WORD:pam_session_state} for user %{USER:user}(?: by \(uid=%{NUMBER:uid}\))?'
+#
+# cron:
+#   name: "cron (Syslog Format)"
+#   grok_pattern: |-
+#     ^%{SYSLOGTIMESTAMP:timestamp} %{HOSTNAME:hostname} CRON(?:\[%{POSINT:pid}\])?: \((?:%{USER:cron_user}|%{USERNAME:cron_user})\) (?<cron_action>(?:CMD|MAIL|TAB)) \((?:%{GREEDYDATA:command}|%{GREEDYDATA:details})\)$
+#   notes: "Specific pattern for cron entries if not using a generic syslog parser for the message part."
+#
+# utmp_wtmp_last_output:
+#   name: "utmp / wtmp (Text output from 'last' command)"
+#   grok_pattern: |-
+#     ^(?:%{USER:user}\s+)?(?:%{TTY:tty}\s+)?(?:%{IPORHOST:from_host}\s+)?%{DAY} %{MONTH} %{MONTHDAY} %{TIME}(?:\s+-\s+%{TIME:logout_time}|\s+still logged in|\s+gone - no logout)(?:\s+\(%{TIME:duration}\))?$'
+#   notes: 'Complex due to varied ''last'' command output. Reboot lines are simpler: ''^reboot\s+system boot\s+%{GREEDYDATA:kernel_version}\s+%{DAY} %{MONTH} %{MONTHDAY} %{TIME}.*$'''
+#
+# # --- Cluster & Orchestration Systems ---
+# # cluster_and_orchestration:
+# slurm_controller_node:
+#   name: "Slurm (slurmctld.log / slurmd.log)"
+#   grok_pattern: |-
+#     ^\[%{TIMESTAMP_ISO8601:timestamp}\](?: \[%{DATA:job_id_or_node}\])?\s*(?:%{LOGLEVEL:log_level}\s+)?%{DATA:slurm_module}: %{GREEDYDATA:message}$
+#   notes: "The 'message' field needs specific parsing for job details."
+#   sub_patterns:
+#     allocate_job: 'Allocate JobId=%{NUMBER:job_id} User=%{USER:user} Partition=%{WORD:partition} Nodes=%{DATA:nodes}'
+#     job_complete: '_job_complete: JobId=%{NUMBER:job_id} Name=%{DATA:job_name} State=%{DATA:job_state}.*WEXITSTATUS %{NUMBER:exit_status}'
+#
+# pbs_torque:
+#   name: "PBS / Torque (Server/MOM Log)"
+#   grok_pattern: |-
+#     ^%{MONTHNUM}/%{MONTHDAY}/%{YEAR} %{TIME:time};%{BASE16NUM:log_code};%{HOSTNAME:pbs_server};(?:%{WORD:component};)?%{DATA:job_id_full};%{GREEDYDATA:message}$
+#
+# kubernetes_generic_text:
+#   name: "Kubernetes (Generic Text Log - LogFmt)"
+#   grok_pattern: |-
+#     ^(?<log_level_short>[IWEF])%{MONTHNUM}%{MONTHDAY}\s+%{TIME}\s+%{INT:thread_id}\s+%{DATA:source_file}:%{INT:source_line}\]\s+%{GREEDYDATA:message}$
+#   notes: "Common for kubelet, kube-apiserver if logging to files in this format. If via journald, parse journald first."
+#
+# containerd:
+#   name: "Containerd (Native Format / Journald)"
+#   grok_pattern: |-
+#     ^time="%{TIMESTAMP_ISO8601:timestamp}" level=%{LOGLEVEL:log_level} msg="%{DATA:message}"(?: %{GREEDYDATA:extra_fields})?$'
+#   notes: "'extra_fields' might contain other key-value pairs."
+#
+# kubernetes_pod_container_text:
+#   name: "Kubernetes Pod/Container (Common Text Log)"
+#   grok_pattern: |-
+#     ^%{TIMESTAMP_ISO8601:timestamp}(?:\s+%{LOGLEVEL:log_level}|\s+\[%{LOGLEVEL:log_level}\])?\s+%{GREEDYDATA:message}$
+#   notes: "For application logs from containers. If JSON, use a JSON parser."
+#
+# docker_logs:
+#   name: "Docker Logs (stdout/stderr from containers)"
+#   grok_pattern: |-
+#     ^(?:%{TIMESTAMP_ISO8601:timestamp}\s+)?(?:\[%{LOGLEVEL:log_level}\]\s+)?%{GREEDYDATA:message}$
+#   notes: "Generic. Adapt to internal log format of the container for the 'message' field."
+#
+# # --- Monitoring & Metrics Tools ---
+# # monitoring_and_metrics:
+# prometheus_server:
+#   name: "Prometheus Server"
+#   grok_pattern: |-
+#     ^level=%{LOGLEVEL:log_level}\s+ts=%{TIMESTAMP_ISO8601:timestamp}\s+caller=%{DATA:caller}(?:\s+component="(?<component>[^"]+)")?(?:\s+scrape_pool="(?<scrape_pool>[^"]+)")?(?:\s+target="(?<target>[^"]+)")?\s+msg="(?<message>[^"]*)"(?: %{GREEDYDATA:extra_kv_pairs})?$'
+#   notes: "'extra_kv_pairs' can be further processed using a KV filter."
+#
+# grafana_server:
+#   name: "Grafana Server"
+#   grok_pattern: |-
+#     ^lvl=%{LOGLEVEL:log_level}\s+msg="(?<message>[^"]*)"\s+logger=%{DATA:logger}(?: %{GREEDYDATA:extra_kv_pairs})?$'
+#
+# node_exporter:
+#   name: "Node Exporter (Error Logs)"
+#   grok_pattern: |-
+#     ^level=%{LOGLEVEL:log_level}\s+ts=%{TIMESTAMP_ISO8601:timestamp}\s+caller=%{DATA:caller}\s+msg="(?<message>[^"]*)"(?: %{GREEDYDATA:extra_kv_pairs})?$'
+#
+# collectd:
+#   name: "Collectd"
+#   grok_pattern: |-
+#     ^\[%{YEAR}-%{MONTHNUM}-%{MONTHDAY}\s+%{TIME:time}(?:\.%{INT:millisecond})?\]\s*(?:%{LOGLEVEL:log_level_uc}: )?(?:%{WORD:plugin_name}(?: plugin)?: )?%{GREEDYDATA:message}$
+#
+# telegraf:
+#   name: "Telegraf"
+#   grok_pattern: |-
+#     ^%{TIMESTAMP_ISO8601:timestamp}\s+%{WORD:log_level_short}!\s+(?:\[%{DATA:component}(?::%{DATA:sub_component})?\]\s+)?%{GREEDYDATA:message}$
+#   notes: "'log_level_short' is usually I, D, W, E."
+#
+# # --- Storage & Filesystem ---
+# # storage_and_filesystem:
+# distributed_fs_kernel_syslog:
+#   name: "Distributed FS (NFS, Ceph Client, etc. - Kernel messages via syslog)"
+#   grok_pattern: |-
+#     ^%{SYSLOGTIMESTAMP:timestamp} %{HOSTNAME:hostname} kernel: (?:\[\s*%{NUMBER:uptime:float}\s*\]\s*)?%{GREEDYDATA:kernel_message}$
+#   notes: "Base for kernel messages. 'kernel_message' needs specific parsing for NFS, Ceph client, etc."
+#   sub_patterns:
+#     nfs_rpc_auth: 'RPC: authorized %{WORD:auth_protocol} client %{HOSTNAME:client_hostname} \(%{DATA:client_details}\)'
+#     filesystem_mount: '%{PROG:filesystem}\s*\(%{NOTSPACE:device}\):\s*%{GREEDYDATA:fs_action_message}' # Example: EXT4-fs (sda1): mounted...
+#
+# ceph_osd_log:
+#   name: "Ceph OSD Log (Example)"
+#   grok_pattern: |-
+#     ^%{TIMESTAMP_ISO8601:timestamp}\s+%{DATA:thread_id_hex}\s+(?:%{INT:priority}\s+osd\.%{INT:osd_id}\s+%{DATA:pg_epoch}\s+%{GREEDYDATA:message}|%{LOGLEVEL:log_level}\s+%{GREEDYDATA:message})$
+#   notes: "Ceph log formats can vary; this tries to cover a couple of common structures."
+#
+# # --- Networking & Firewalls ---
+# # networking_and_firewalls:
+#
+# iptables_netfilter_ufw_kernel:
+#   name: "iptables / nftables / ufw (Kernel Logs via Syslog/Journald)"
+#   grok_pattern: |-
+#     ^%{SYSLOGTIMESTAMP:timestamp} %{HOSTNAME:hostname} kernel: (?:\[\s*%{NUMBER:uptime:float}\s*\]\s*)?(?<firewall_prefix>(?:\[UFW BLOCK\]|\[IPTABLES BLOCK\]|NETFILTER)\s*)?%{GREEDYDATA:firewall_details}$
+#   notes: "The 'firewall_details' string is typically a series of key-value pairs (e.g., IN= OUT= SRC= DST=) and needs careful KV parsing."
+#   example_kv_string_for_firewall_details: 'IN=%{IFACE:in_interface} OUT=%{IFACE:out_interface} MAC=%{MAC:mac_address} SRC=%{IP:source_ip} DST=%{IP:destination_ip} LEN=%{NUMBER:length} TOS=0x%{WORD:tos} PREC=0x%{WORD:precedence} TTL=%{NUMBER:ttl} ID=%{DATA:id} PROTO=%{WORD:protocol}(?: SPT=%{NUMBER:source_port} DPT=%{NUMBER:destination_port})?'
+#
+# bind_named_querylog:
+#   name: "BIND Named (Query Log)"
+#   grok_pattern: |-
+#     ^%{MONTHDAY}-%{MONTH}-%{YEAR}\s+%{TIME:time}\.%{INT:millisecond}\s+client\s+(?:@%{DATA:client_id}\s+)?%{IPORHOST:client_ip}#%{POSINT:client_port}\s+\((?:%{HOSTNAME:query_view_internal}|%{HOSTNAME:query_domain_paren})\):\s+query:\s+%{HOSTNAME:query_domain}\s+%{WORD:query_class}\s+%{WORD:query_type}\s+%{DATA:query_flags_short}\s+\(%{IPORHOST:resolver_ip}\)$
+#
+# dnsmasq_syslog:
+#   name: "dnsmasq (via Syslog)"
+#   grok_pattern: |-
+#     ^%{SYSLOGTIMESTAMP:timestamp} %{HOSTNAME:hostname} dnsmasq(?:\[%{NUMBER:pid}\])?: %{GREEDYDATA:dnsmasq_message}$
+#   notes: "Parse 'dnsmasq_message' further."
+#   sub_patterns:
+#     query: 'query\[%{WORD:query_type}\] %{HOSTNAME:domain} from %{IP:client_ip}'
+#     forwarded: 'forwarded %{HOSTNAME:domain} to %{IP:upstream_server}'
+#     reply: 'reply %{HOSTNAME:domain} is (?:<CNAME>|%{IP:resolved_ip}|%{DATA:dns_reply_data})'
+#
+# dhcpd_isc_syslog:
+#   name: "ISC DHCPD (via Syslog)"
+#   grok_pattern: |-
+#     ^%{SYSLOGTIMESTAMP:timestamp} %{HOSTNAME:hostname} dhcpd(?:\[%{NUMBER:pid}\])?: %{GREEDYDATA:dhcp_message}$
+#   notes: "Parse 'dhcp_message' for specific DHCP actions (DISCOVER, OFFER, REQUEST, ACK)."
+#   sub_patterns:
+#     discover: 'DHCPDISCOVER from %{MAC:mac_address}(?: \((?:%{HOSTNAME:client_hostname}|%{DATA:client_hostname_raw})\))? via %{IFACE:interface}'
+#     offer: 'DHCPOFFER on %{IP:offered_ip} to %{MAC:mac_address}(?: \((?:%{HOSTNAME:client_hostname}|%{DATA:client_hostname_raw})\))? via %{IFACE:interface}'
+#     request: 'DHCPREQUEST for %{IP:requested_ip}(?: \(%{IP:server_identifier}\))? from %{MAC:mac_address}(?: \((?:%{HOSTNAME:client_hostname}|%{DATA:client_hostname_raw})\))? via %{IFACE:interface}'
+#     ack: 'DHCPACK on %{IP:assigned_ip} to %{MAC:mac_address}(?: \((?:%{HOSTNAME:client_hostname}|%{DATA:client_hostname_raw})\))? via %{IFACE:interface}'
+#
+# # --- Databases in Cluster Contexts ---
+# # databases_in_cluster:
+# postgresql_server:
+#   name: "PostgreSQL Server Log"
+#   grok_pattern: |-
+#     ^%{TIMESTAMP_ISO8601:timestamp}(?: %{WORD:timezone})?\s+\[%{DATA:process_info}\](?:\s+%{USER:username}@%{DATABASE:database})?(?:\s+\[%{DATA:session_info}\])?\s+%{LOGLEVEL:log_level}:\s+(?:duration: %{NUMBER:duration_ms:float} ms\s+)?(?:(?:statement|execute(?: <unnamed>)?): %{GREEDYDATA:sql_statement}|%{GREEDYDATA:message})$
+#
+# mysql_error_log:
+#   name: "MySQL Error Log"
+#   grok_pattern: |-
+#     ^%{TIMESTAMP_ISO8601:timestamp}\s+%{NUMBER:thread_id}\s+\[%{WORD:log_severity}\](?:\s+\[MY-%{DATA:error_code}\])?\s+\[%{WORD:component}(?:-%{INT:sub_component_id})?\]\s+(?:\[%{DATA:sub_system}\]\s)?%{GREEDYDATA:message}$
+#
+# influxdb_kv:
+#   name: "InfluxDB (Key-Value Log Style)"
+#   grok_pattern: |-
+#     ^ts=%{TIMESTAMP_ISO8601:timestamp}\s+lvl=%{LOGLEVEL:log_level}\s+msg="(?<message>[^"]*)"(?:\s+log_id=%{DATA:log_id})?(?:\s+service=%{DATA:service})?(?:\s+op_name="[^"]*")?(?:\s+op_event="[^"]*")?(?: %{GREEDYDATA:extra_kv_pairs})?$'
+#   notes: "Also check for HTTPD style messages within the 'message' or as separate lines if configured."
+#
+# influxdb_httpd:
+#   name: "InfluxDB (HTTPD Log Style)"
+#   grok_pattern: |-
+#     ^\[httpd\] %{IPORHOST:client_ip} - %{USER:auth_user} \[%{HTTPDATE:http_timestamp}\] "%{WORD:http_method} %{URIPATHPARAM:http_path} HTTP/%{NUMBER:http_version}" %{NUMBER:response_code:int} %{NUMBER:bytes_sent:int} "%{DATA:http_referrer}" "%{DATA:http_user_agent}" %{GREEDYDATA:request_id}$
+#
+# cassandra_system_log:
+#   name: "Cassandra (system.log)"
+#   grok_pattern: |-
+#     ^%{LOGLEVEL:log_level}\s+\[%{DATA:thread_name}\]\s+%{YEAR}-%{MONTHNUM}-%{MONTHDAY}\s+%{TIME:time},%{INT:millisecond}\s+%{JAVACLASS:java_class}:%{POSINT:java_line_number}\s+-\s+%{GREEDYDATA:message}$
+#
+# # --- Web Servers & Message Queues ---
+# # web_servers_and_message_queues:
+# nginx_access:
+#   name: "Nginx (Access Log - Combined Format)"
+#   grok_pattern: |-
+#     %{IPORHOST:client_ip} - %{USERNAME:remote_user} \[%{HTTPDATE:time_local}\] "%{WORD:verb} %{URIPATHPARAM:request} %{WORD:protocol}" %{INT:status} %{NUMBER:bytes_sent} "%{DATA:http_referer}" "%{DATA:http_user_agent}"
+#
+# nginx_error:
+#   name: "Nginx (Error Log)"
+#   grok_pattern: |-
+#     %{DATA:time} \[%{DATA:log_level}\] %{NUMBER:pid}#%{NUMBER:tid}: (\*%{NUMBER:connection_id} )?%{GREEDYDATA:messageTmp}
+#
+# # haproxy_syslog:
+# #   name: "HAProxy (Syslog Format)"
+# #   grok_pattern: |-
+# #     ^%{SYSLOGTIMESTAMP:syslog_timestamp} %{HOSTNAME:hostname} haproxy(?:\[%{NUMBER:pid}\])?: %{IPORHOST:client_ip}:%{INT:client_port} \[%{HTTPDATE:accept_date}\] %{NOTSPACE:frontend_name} %{NOTSPACE:backend_name}/%{NOTSPACE:server_name} %{INT:time_request}/%{INT:time_queue}/%{INT:time_connect}/%{INT:time_response}/%{INT:time_total_session} %{INT:status_code} %{NUMBER:bytes_read} %{NOTSPACE:captured_request_cookie} %{NOTSPACE:captured_response_cookie} %{NOTSPACE:termination_state} %{INT:actconn}/%{INT:feconn}/%{INT:beconn}/%{INT:srvconn}/%{INT:retries} %{INT:srv_queue}/%{INT:backend_queue} (?:%{QS:captured_headers}|"%{DATA:http_request_line}")'
+#
+# rabbitmq:
+#   name: "RabbitMQ"
+#   grok_pattern: |-
+#     \[%{TIMESTAMP_ISO8601:timestamp}\] %{LOGLEVEL:level} %{GREEDYDATA:message}
+#
+# # already in json?
+# # kafka_server:
+# #   name: "Kafka (server.log, controller.log)"
+# #   grok_pattern: |-
+# #     ^\[%{YEAR}-%{MONTHNUM}-%{MONTHDAY}\s+%{TIME:time},%{INT:millisecond}\]\s+%{LOGLEVEL:log_level}\s+\[%{DATA:thread_info}\]\s+%{GREEDYDATA:message_body}(?:\s+\((?:%{JAVACLASS:class_name}|%{DATA:logger_name})\))?$'
+#
+# redis:
+#   name: "Redis"
+#   grok_pattern: |-
+#     %{REDISTIMESTAMP:timestamp} %{GREEDYDATA:message}
+#   notes: "'role_char' is M (master), S (replica), C (sentinel), X (cluster node pre-role)."
+#
+# lsf_event_log:
+#   name: "LSF (lim.log, sbatchd.log, mbatchd.log - Generic Structure)"
+#   grok_pattern: |-
+#     %{TIMESTAMP_ISO8601:timestamp} %{WORD:user} %{WORD:host} %{GREEDYDATA:command} %{NUMBER:return_code}
+#   notes: "LSF logs often have a specific quoted keyword, version, and timestamp format. The 'lsf_message_details' will vary greatly depending on the event type and log file (e.g., job submission, completion, errors). This is a very basic starting point. Detailed parsing requires knowledge of specific LSF event formats. Timestamps are often Unix epoch."
+#   sub_patterns: # This would be a sub-parser for lsf_message_details for a job submission
+#     # "JOB_NEW" 10 1678886400 0 12345 USER1 default - - - - - myjob - - - - - - - - - - - - - - - - - - - - - - - CWD /home/user1
+#     # This is highly complex and context-dependent. The above is a conceptual example.
+#     job_new_example: '%{INT:unknown_field_1} %{INT:job_id} %{USER:user} %{DATA:queue} %{GREEDYDATA:remaining_fields}' # Highly simplified

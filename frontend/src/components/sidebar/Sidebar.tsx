@@ -17,7 +17,8 @@ import { Link, useLocation } from 'react-router-dom';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import StorageIcon from '@mui/icons-material/Storage';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
-import TextFieldsIcon from '@mui/icons-material/TextFields';
+import TextFieldsIcon from '@mui/icons-material/TextFields'; // General parsing
+import SchemaIcon from '@mui/icons-material/Schema'; // For Static Grok Parser
 import ManageSearchIcon from '@mui/icons-material/ManageSearch';
 import PlaylistAddCheckIcon from '@mui/icons-material/PlaylistAddCheck';
 import TimerIcon from '@mui/icons-material/Timer';
@@ -28,6 +29,7 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 
 const drawerWidth = 240;
 
+// DEFINE THESE STYLED COMPONENTS AND MIXINS ONCE
 const openedMixin = (theme: any) => ({
   width: drawerWidth,
   transition: theme.transitions.create('width', {
@@ -74,22 +76,25 @@ const DrawerHeader = styled('div')(({ theme }) => ({
   ...theme.mixins.toolbar,
 }));
 
+
 interface SidebarItem {
   text: string;
   icon: React.ReactElement;
   path: string;
+  divider?: boolean;
 }
 
 const sidebarItems: SidebarItem[] = [
   { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
   { text: 'Container Mgmt', icon: <StorageIcon />, path: '/container' },
-  { text: 'Collect Logs', icon: <FolderOpenIcon />, path: '/collect' },
+  { text: 'Collect Logs', icon: <FolderOpenIcon />, path: '/collect', divider: true },
   { text: 'Group Info', icon: <GroupWorkIcon />, path: '/groups' },
-  { text: 'File Parser', icon: <TextFieldsIcon />, path: '/file-parser' },
-  { text: 'ES Parser', icon: <ManageSearchIcon />, path: '/es-parser' },
-  { text: 'Normalize TS', icon: <TimerIcon />, path: '/normalize-ts' },
-  { text: 'Analyze Errors', icon: <ErrorOutlineIcon />, path: '/analyze-errors' },
-  { text: 'Prompts Manager', icon: <PlaylistAddCheckIcon />, path: '/prompts-manager' },
+  // { text: 'File Parser (LLM)', icon: <TextFieldsIcon />, path: '/file-parser' },
+  { text: 'ES Parser (LLM)', icon: <ManageSearchIcon />, path: '/es-parser' },
+  { text: 'Static Grok Parser', icon: <SchemaIcon />, path: '/static-grok-parser', divider: true }, // ADDED
+  // { text: 'Normalize TS', icon: <TimerIcon />, path: '/normalize-ts' },
+  // { text: 'Analyze Errors', icon: <ErrorOutlineIcon />, path: '/analyze-errors', divider: true },
+  // { text: 'Prompts Manager', icon: <PlaylistAddCheckIcon />, path: '/prompts-manager' },
 ];
 
 interface SidebarProps {
@@ -112,47 +117,54 @@ const Sidebar: React.FC<SidebarProps> = ({ open, handleDrawerClose, handleDrawer
       <Divider />
       <List>
         {sidebarItems.map((item) => (
-          <Tooltip title={!open ? item.text : ""} placement="right" key={`${item.text}-tooltip`}>
-            <ListItemButton
-              key={item.text}
-              component={Link}
-              to={item.path}
-              selected={location.pathname === item.path}
-              sx={{
-                minHeight: 48,
-                justifyContent: open ? 'initial' : 'center',
-                px: 2.5,
-                '&.Mui-selected': {
-                  backgroundColor: theme.palette.action.selected,
-                  '&:hover': {
-                    backgroundColor: theme.palette.action.hover,
-                  },
-                },
-              }}
-            >
-              <ListItemIcon
+          <React.Fragment key={item.text}>
+            <Tooltip title={!open ? item.text : ""} placement="right">
+              <ListItemButton
+                component={Link}
+                to={item.path}
+                selected={location.pathname === item.path || (item.path === "/" && location.pathname.startsWith("/dashboard"))} // Adjust selection logic if needed
                 sx={{
-                  minWidth: 0,
-                  mr: open ? 3 : 'auto',
-                  justifyContent: 'center',
-                  color: location.pathname === item.path ? theme.palette.primary.main : 'inherit',
+                  minHeight: 48,
+                  justifyContent: open ? 'initial' : 'center',
+                  px: 2.5,
+                  '&.Mui-selected': {
+                    backgroundColor: theme.palette.action.selected,
+                    '&:hover': { backgroundColor: theme.palette.action.hover },
+                  },
                 }}
               >
-                {item.icon}
-              </ListItemIcon>
-              <ListItemText
-                primary={item.text}
-                sx={{
-                  opacity: open ? 1 : 0,
-                  color: location.pathname === item.path ? theme.palette.primary.main : 'inherit',
-                }}
-              />
-            </ListItemButton>
-          </Tooltip>
+                <ListItemIcon
+                  sx={{
+                    minWidth: 0,
+                    mr: open ? 3 : 'auto',
+                    justifyContent: 'center',
+                    color: location.pathname === item.path ? theme.palette.primary.main : 'inherit',
+                  }}
+                >
+                  {item.icon}
+                </ListItemIcon>
+                <ListItemText
+                  primary={item.text}
+                  sx={{
+                    opacity: open ? 1 : 0,
+                    color: location.pathname === item.path ? theme.palette.primary.main : 'inherit',
+                  }}
+                />
+              </ListItemButton>
+            </Tooltip>
+            {item.divider && <Divider sx={{ my: 1 }} />}
+          </React.Fragment>
         ))}
       </List>
     </StyledDrawer>
   );
 };
+
+// REMOVE THE REDECLARATIONS FROM HERE
+// openedMixin = (theme: any) => ({ /* ... */ });
+// closedMixin = (theme: any) => ({ /* ... */ });
+// StyledDrawer = styled(Drawer, { shouldForwardProp: (prop) => prop !== 'open' })( /* ... */ );
+// DrawerHeader = styled('div')(({ theme }) => ({ /* ... */ }));
+
 
 export default Sidebar;
