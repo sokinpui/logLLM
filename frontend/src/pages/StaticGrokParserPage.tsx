@@ -3,7 +3,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Container, Typography, Grid, TextField, Button, Paper, Box, CircularProgress,
   Alert, Switch, FormControlLabel, Divider, Chip, Accordion, AccordionSummary,
-  AccordionDetails, Tooltip, IconButton, TextareaAutosize, TableContainer, Table,
+  AccordionDetails, Tooltip, IconButton, // TextareaAutosize removed
+  TableContainer, Table,
   TableHead, TableRow, TableCell, TableBody, Link as MuiLink,
   useTheme,
   MenuItem
@@ -15,10 +16,8 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
-import SaveIcon from '@mui/icons-material/Save';
-import FileUploadIcon from '@mui/icons-material/FileUpload';
-import FileDownloadIcon from '@mui/icons-material/FileDownload';
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'; // For confirm button
+// SaveIcon, FileUploadIcon, FileDownloadIcon removed as editor is gone
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 
 
 import * as staticGrokService from '../services/staticGrokParseService';
@@ -31,37 +30,39 @@ const LS_SGROK_PREFIX = 'logllm_staticgrok_';
 const LS_SGROK_RUN_GROUP_NAME = `${LS_SGROK_PREFIX}runGroupName`;
 const LS_SGROK_RUN_ALL_GROUPS = `${LS_SGROK_PREFIX}runAllGroups`;
 const LS_SGROK_CLEAR_PREVIOUS = `${LS_SGROK_PREFIX}clearPrevious`;
-const LS_SGROK_PATTERNS_CONTENT = `${LS_SGROK_PREFIX}patternsContent`;
+// const LS_SGROK_PATTERNS_CONTENT = `${LS_SGROK_PREFIX}patternsContent`; // REMOVED
 const LS_SGROK_PATTERNS_FILE_PATH = `${LS_SGROK_PREFIX}patternsFilePath`;
-const LS_SGROK_USE_SERVER_PATH = `${LS_SGROK_PREFIX}useServerPath`;
+// const LS_SGROK_USE_SERVER_PATH = `${LS_SGROK_PREFIX}useServerPath`; // REMOVED
+const LS_SGROK_SERVER_PATH_CONFIRMED = `${LS_SGROK_PREFIX}serverPathConfirmed`;
 const LS_SGROK_FILTER_STATUS_GROUP = `${LS_SGROK_PREFIX}filterStatusGroup`;
 const LS_SGROK_DELETE_GROUP_NAME = `${LS_SGROK_PREFIX}deleteGroupName`;
 const LS_SGROK_DELETE_ALL_GROUPS = `${LS_SGROK_PREFIX}deleteAllGroups`;
 const LS_SGROK_TASK_ID = `${LS_SGROK_PREFIX}taskId`;
-const LS_SGROK_TASK_STATUS_OBJ = `${LS_SGROK_PREFIX}taskStatusObj`; // For the whole task status object
+const LS_SGROK_TASK_STATUS_OBJ = `${LS_SGROK_PREFIX}taskStatusObj`;
 
 
 const StaticGrokParserPage: React.FC = () => {
   const theme = useTheme();
 
-  // State with localStorage initialization
   const [runGroupName, setRunGroupName] = useState<string>(() => localStorage.getItem(LS_SGROK_RUN_GROUP_NAME) || '');
   const [runAllGroups, setRunAllGroups] = useState<boolean>(() => JSON.parse(localStorage.getItem(LS_SGROK_RUN_ALL_GROUPS) || 'true'));
   const [clearPrevious, setClearPrevious] = useState<boolean>(() => JSON.parse(localStorage.getItem(LS_SGROK_CLEAR_PREVIOUS) || 'false'));
 
-  const [grokPatternsContent, setGrokPatternsContent] = useState<string>(() => localStorage.getItem(LS_SGROK_PATTERNS_CONTENT) || '');
-  const [grokPatternsFilename, setGrokPatternsFilename] = useState<string>('grok_patterns.yaml'); // Usually from API, not LS
-  const [isPatternsModified, setIsPatternsModified] = useState<boolean>(false); // Derived, not stored
+  // Removed state for grokPatternsContent, grokPatternsFilename, isPatternsModified
   const [grokPatternsFilePathOnServer, setGrokPatternsFilePathOnServer] = useState<string>(() => localStorage.getItem(LS_SGROK_PATTERNS_FILE_PATH) || '');
-  const [useServerPathForPatterns, setUseServerPathForPatterns] = useState<boolean>(() => JSON.parse(localStorage.getItem(LS_SGROK_USE_SERVER_PATH) || 'false'));
-  const [serverPathConfirmed, setServerPathConfirmed] = useState<boolean>(false); // New state for path confirmation visual
+  // useServerPathForPatterns removed, path is now always primary
+  const [serverPathConfirmed, setServerPathConfirmed] = useState<boolean>(() => {
+    const storedPath = localStorage.getItem(LS_SGROK_PATTERNS_FILE_PATH) || '';
+    const storedConfirmed = JSON.parse(localStorage.getItem(LS_SGROK_SERVER_PATH_CONFIRMED) || 'false');
+    return storedPath.trim() !== '' && storedConfirmed;
+  });
 
   const [taskId, setTaskId] = useState<string | null>(() => localStorage.getItem(LS_SGROK_TASK_ID) || null);
   const [taskStatusObj, setTaskStatusObj] = useState<staticGrokService.StaticGrokTaskStatus | null>(() => {
       const stored = localStorage.getItem(LS_SGROK_TASK_STATUS_OBJ);
       try { return stored ? JSON.parse(stored) : null; } catch (e) { return null;}
   });
-  // Derived from taskStatusObj for easier access
+
   const taskStatus = taskStatusObj?.status || null;
   const taskProgressDetail = taskStatusObj?.progress_detail || null;
   const taskError = taskStatusObj?.error || null;
@@ -80,7 +81,7 @@ const StaticGrokParserPage: React.FC = () => {
   const [loadingRun, setLoadingRun] = useState<boolean>(false);
   const [loadingStatusList, setLoadingStatusList] = useState<boolean>(false);
   const [loadingDelete, setLoadingDelete] = useState<boolean>(false);
-  const [loadingPatterns, setLoadingPatterns] = useState<boolean>(false);
+  // loadingPatterns removed
   const [pageError, setPageError] = useState<string | null>(null);
   const [pageSuccess, setPageSuccess] = useState<string | null>(null);
 
@@ -88,12 +89,15 @@ const StaticGrokParserPage: React.FC = () => {
   useEffect(() => { localStorage.setItem(LS_SGROK_RUN_GROUP_NAME, runGroupName); }, [runGroupName]);
   useEffect(() => { localStorage.setItem(LS_SGROK_RUN_ALL_GROUPS, JSON.stringify(runAllGroups)); }, [runAllGroups]);
   useEffect(() => { localStorage.setItem(LS_SGROK_CLEAR_PREVIOUS, JSON.stringify(clearPrevious)); }, [clearPrevious]);
-  useEffect(() => { localStorage.setItem(LS_SGROK_PATTERNS_CONTENT, grokPatternsContent); }, [grokPatternsContent]);
+  // grokPatternsContent useEffect removed
   useEffect(() => {
     localStorage.setItem(LS_SGROK_PATTERNS_FILE_PATH, grokPatternsFilePathOnServer);
-    setServerPathConfirmed(false); // Reset confirmation if path changes
+    if (!grokPatternsFilePathOnServer.trim()) {
+        setServerPathConfirmed(false);
+    }
   }, [grokPatternsFilePathOnServer]);
-  useEffect(() => { localStorage.setItem(LS_SGROK_USE_SERVER_PATH, JSON.stringify(useServerPathForPatterns)); }, [useServerPathForPatterns]);
+  // useServerPathForPatterns useEffect removed
+  useEffect(() => { localStorage.setItem(LS_SGROK_SERVER_PATH_CONFIRMED, JSON.stringify(serverPathConfirmed));}, [serverPathConfirmed]);
   useEffect(() => { localStorage.setItem(LS_SGROK_FILTER_STATUS_GROUP, filterStatusGroup); }, [filterStatusGroup]);
   useEffect(() => { localStorage.setItem(LS_SGROK_DELETE_GROUP_NAME, deleteGroupName); }, [deleteGroupName]);
   useEffect(() => { localStorage.setItem(LS_SGROK_DELETE_ALL_GROUPS, JSON.stringify(deleteAllGroupsData)); }, [deleteAllGroupsData]);
@@ -119,34 +123,12 @@ const StaticGrokParserPage: React.FC = () => {
     }
   }, []);
 
-  const fetchGrokPatterns = useCallback(async () => {
-    setLoadingPatterns(true);
-    setPageError(null);
-    try {
-      const response = await staticGrokService.getGrokPatternsFile();
-      if (response.error) {
-        setPageError(`Failed to load Grok patterns: ${response.error}`);
-        setGrokPatternsContent(`# Error loading patterns file from server: ${response.error}\n# Check server logs and ensure '${response.filename}' exists and is readable by the application.`);
-      } else {
-        const storedContent = localStorage.getItem(LS_SGROK_PATTERNS_CONTENT);
-        if (!isPatternsModified || !storedContent) {
-            setGrokPatternsContent(response.content);
-        }
-        setGrokPatternsFilename(response.filename);
-      }
-      setIsPatternsModified(false);
-    } catch (err: any) {
-      setPageError(err.message || 'Failed to fetch Grok patterns file.');
-      setGrokPatternsContent("# Failed to fetch Grok patterns file. See error above or console.");
-    } finally {
-      setLoadingPatterns(false);
-    }
-  }, [isPatternsModified]);
+  // fetchGrokPatterns (for editor content) removed
 
   useEffect(() => {
     fetchGroupsForDropdown();
-    fetchGrokPatterns();
-  }, [fetchGroupsForDropdown, fetchGrokPatterns]);
+    // No need to fetch patterns for editor anymore
+  }, [fetchGroupsForDropdown]);
 
 
   const handleRunParser = async () => {
@@ -154,32 +136,23 @@ const StaticGrokParserPage: React.FC = () => {
     setTaskId(null); setTaskStatusObj(null);
     setLoadingRun(true);
 
-    let patternsContentForApi: string | null = null;
-    let serverPathForApi: string | null = null;
-
-    if (useServerPathForPatterns) {
-        if (!grokPatternsFilePathOnServer.trim()) {
-            setPageError("Please specify the Grok patterns file path on the server or uncheck 'Use server path'.");
-            setLoadingRun(false);
-            return;
-        }
-        // Potentially check serverPathConfirmed here if strict confirmation is needed
-        // if (!serverPathConfirmed) {
-        //   setPageError("Please confirm the server path before running.");
-        //   setLoadingRun(false);
-        //   return;
-        // }
-        serverPathForApi = grokPatternsFilePathOnServer.trim();
-    } else if (isPatternsModified) {
-        patternsContentForApi = grokPatternsContent;
+    if (!grokPatternsFilePathOnServer.trim()) {
+        setPageError("Please specify the Grok patterns file path on the server.");
+        setLoadingRun(false);
+        return;
+    }
+    if (!serverPathConfirmed) {
+       setPageError("Server path is not confirmed. Please click 'Confirm Path'.");
+       setLoadingRun(false);
+       return;
     }
 
     const params: staticGrokService.StaticGrokRunRequest = {
       all_groups: runAllGroups,
       group_name: runAllGroups ? null : runGroupName.trim() || null,
       clear_previous_results: clearPrevious,
-      grok_patterns_file_content: patternsContentForApi,
-      grok_patterns_file_path_on_server: serverPathForApi,
+      grok_patterns_file_path_on_server: grokPatternsFilePathOnServer.trim(),
+      // grok_patterns_file_content is no longer sent from this UI
     };
 
     try {
@@ -195,8 +168,6 @@ const StaticGrokParserPage: React.FC = () => {
       setPageError(apiErr.detail ? String(apiErr.detail) : 'Failed to start static Grok parsing.');
     } finally {
       setLoadingRun(false);
-      if (!useServerPathForPatterns && isPatternsModified) {
-      }
     }
   };
 
@@ -241,27 +212,8 @@ const StaticGrokParserPage: React.FC = () => {
     }
   };
 
-  const handleSavePatternsToServerDefault = async () => {
-    setLoadingPatterns(true); setPageError(null); setPageSuccess(null);
-    try {
-        const blob = new Blob([grokPatternsContent], { type: 'application/x-yaml' });
-        const file = new File([blob], grokPatternsFilename || 'grok_patterns.yaml', { type: 'application/x-yaml' });
-
-        const response = await staticGrokService.updateGrokPatternsFile(file);
-        setPageSuccess(response.message);
-        setIsPatternsModified(false);
-    } catch (err: any) {
-        const apiErr = err as ApiError;
-        setPageError(apiErr.detail ? String(apiErr.detail) : 'Failed to save Grok patterns file to server default.');
-    } finally {
-        setLoadingPatterns(false);
-    }
-  };
-
-  const handlePatternsTextChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setGrokPatternsContent(event.target.value);
-    setIsPatternsModified(true);
-  };
+  // handleSavePatternsToServerDefault removed
+  // handlePatternsTextChange removed
 
   const handleDeleteData = async () => {
     if (!deleteAllGroupsData && !deleteGroupName.trim()) {
@@ -290,7 +242,6 @@ const StaticGrokParserPage: React.FC = () => {
 
   const handleConfirmServerPath = () => {
     if (grokPatternsFilePathOnServer.trim()) {
-      // Basic client-side validation (optional)
       if (!grokPatternsFilePathOnServer.startsWith('/') && !/^[a-zA-Z]:\\/.test(grokPatternsFilePathOnServer)) {
         setPageError("Server path should be absolute (e.g., /path/to/file or C:\\path\\to\\file).");
         setServerPathConfirmed(false);
@@ -301,7 +252,7 @@ const StaticGrokParserPage: React.FC = () => {
         setServerPathConfirmed(false);
         return;
       }
-      setPageError(null); // Clear previous path errors
+      setPageError(null);
       setServerPathConfirmed(true);
       setPageSuccess(`Server path '${grokPatternsFilePathOnServer}' set for run.`);
     } else {
@@ -325,101 +276,36 @@ const StaticGrokParserPage: React.FC = () => {
           <Typography variant="h5">Grok Patterns Source</Typography>
         </AccordionSummary>
         <AccordionDetails>
-            <FormControlLabel
-                control={
-                    <Switch
-                        checked={useServerPathForPatterns}
-                        onChange={(e) => {
-                            setUseServerPathForPatterns(e.target.checked);
-                            if (!e.target.checked) setServerPathConfirmed(false); // Reset confirmation if switching off
-                        }}
-                    />
-                }
-                label="Use specific Grok patterns YAML file path on server for RUN"
-                sx={{mb: 1}}
-            />
-            {useServerPathForPatterns ? (
-                <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 2 }}>
-                    <TextField
-                        label="Grok Patterns YAML File Path on Server (Absolute)"
-                        value={grokPatternsFilePathOnServer}
-                        onChange={(e) => setGrokPatternsFilePathOnServer(e.target.value)}
-                        fullWidth
-                        helperText="e.g., /opt/logllm/custom_grok.yaml. If used, editor content below is ignored for 'Run Parser'."
-                        variant="outlined"
-                        sx={{ flexGrow: 1 }}
-                        disabled={serverPathConfirmed || loadingRun || isTaskRunning}
-                    />
-                    <Button
-                        variant="outlined"
-                        onClick={handleConfirmServerPath}
-                        disabled={!grokPatternsFilePathOnServer.trim() || serverPathConfirmed || loadingRun || isTaskRunning}
-                        startIcon={<CheckCircleOutlineIcon />}
-                        sx={{ height: '56px', whiteSpace: 'nowrap' }}
-                        color={serverPathConfirmed ? "success" : "primary"}
-                    >
-                        {serverPathConfirmed ? "Path Confirmed" : "Confirm Path"}
-                    </Button>
-                </Box>
-            ) : (
-                <>
-                    <Typography variant="subtitle1" sx={{mb:1}}>
-                        Editor Content (Default: {grokPatternsFilename})
-                         {isPatternsModified && <Chip label="Modified" size="small" color="warning" sx={{ml:1}}/>}
-                    </Typography>
-                    <TextareaAutosize
-                        minRows={10}
-                        maxRows={25}
-                        value={grokPatternsContent}
-                        onChange={handlePatternsTextChange}
-                        style={{ width: '100%', fontFamily: 'monospace', fontSize: '0.9rem', border: `1px solid ${theme.palette.divider}`, padding: '8px', whiteSpace: 'pre', backgroundColor: theme.palette.background.paper, color: theme.palette.text.primary, borderRadius: theme.shape.borderRadius }}
-                        disabled={loadingPatterns}
-                    />
-                </>
-            )}
-
-            <Box sx={{ mt: 2, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                {!useServerPathForPatterns && (
-                    <Button
-                        variant="contained"
-                        onClick={handleSavePatternsToServerDefault}
-                        disabled={loadingPatterns || !isPatternsModified}
-                        startIcon={<SaveIcon />}
-                    >
-                        Save Editor Content to Server Default
-                    </Button>
-                )}
+            {/* Removed Switch for useServerPathForPatterns and TextareaAutosize */}
+            <Typography variant="subtitle1" sx={{mb:1}}>
+                Provide the absolute path to your Grok patterns YAML file on the server.
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 2 }}>
+                <TextField
+                    label="Grok Patterns YAML File Path on Server (Absolute)"
+                    value={grokPatternsFilePathOnServer}
+                    onChange={(e) => {
+                        setGrokPatternsFilePathOnServer(e.target.value);
+                        if (serverPathConfirmed) setServerPathConfirmed(false);
+                    }}
+                    fullWidth
+                    helperText="e.g., /opt/logllm/custom_grok.yaml. This path will be used for the 'Run Parser' operation."
+                    variant="outlined"
+                    sx={{ flexGrow: 1 }}
+                    disabled={loadingRun || isTaskRunning}
+                />
                 <Button
                     variant="outlined"
-                    onClick={() => {
-                        fetchGrokPatterns();
-                        // If using server path and reloading editor, it doesn't impact the confirmed server path itself
-                    }}
-                    disabled={loadingPatterns}
-                    startIcon={<RefreshIcon />}
+                    onClick={handleConfirmServerPath}
+                    disabled={!grokPatternsFilePathOnServer.trim() || loadingRun || isTaskRunning }
+                    startIcon={<CheckCircleOutlineIcon />}
+                    sx={{ height: '56px', whiteSpace: 'nowrap' }}
+                    color={serverPathConfirmed ? "success" : "primary"}
                 >
-                    {useServerPathForPatterns ? "Reload Editor with Server Default" : "Reload Editor from Server Default"}
-                </Button>
-                <Button
-                    variant="outlined"
-                    startIcon={<FileDownloadIcon />}
-                    disabled={loadingPatterns || !grokPatternsContent || useServerPathForPatterns}
-                    onClick={() => {
-                        const blob = new Blob([grokPatternsContent], { type: 'application/x-yaml' });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = grokPatternsFilename || 'grok_patterns.yaml';
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        URL.revokeObjectURL(url);
-                    }}
-                >
-                    Download Editor Content
+                    {serverPathConfirmed ? "Path Confirmed" : "Confirm Path"}
                 </Button>
             </Box>
-            {loadingPatterns && <CircularProgress size={20} sx={{ml:1, mt:1}}/>}
+            {/* Removed buttons for Save Editor, Reload Editor, Download Editor */}
         </AccordionDetails>
       </Accordion>
 
@@ -468,15 +354,15 @@ const StaticGrokParserPage: React.FC = () => {
                 loadingRun ||
                 isTaskRunning ||
                 (!runAllGroups && !runGroupName.trim()) ||
-                (useServerPathForPatterns && (!grokPatternsFilePathOnServer.trim() || !serverPathConfirmed))
+                (!grokPatternsFilePathOnServer.trim() || !serverPathConfirmed) // Path must be set and confirmed
               }
             >
               {loadingRun || isTaskRunning ? <CircularProgress size={24} color="inherit" /> : <PlayArrowIcon/>}
               {isTaskRunning ? 'Parsing in Progress...' : 'Start Parsing Run'}
             </Button>
-            {useServerPathForPatterns && (!grokPatternsFilePathOnServer.trim() || !serverPathConfirmed) &&
-                <Typography variant="caption" color="error" sx={{ml:1}}>
-                    {!grokPatternsFilePathOnServer.trim() ? "Server path is required." : "Please confirm server path."}
+            {(!grokPatternsFilePathOnServer.trim() || !serverPathConfirmed) &&
+                <Typography variant="caption" color="error" sx={{ml:1, display:'inline-block', verticalAlign: 'middle'}}>
+                    {!grokPatternsFilePathOnServer.trim() ? "Server path is required." : "Server path not confirmed."}
                 </Typography>
             }
           </Grid>

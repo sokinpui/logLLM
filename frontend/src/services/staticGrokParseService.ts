@@ -1,38 +1,36 @@
 // frontend/src/services/staticGrokParseService.ts
-import apiClient from "./api"; // Assuming apiClient is refactored from ./api
-import type { MessageResponse } from "../types/api"; // Common message response
-
-// Define request/response types specific to static-grok-parser
-// These should mirror Pydantic models in static_grok_parse_router.py
+import apiClient from "./api";
+import type { MessageResponse } from "../types/api";
 
 export interface StaticGrokRunRequest {
   group_name?: string | null;
   all_groups?: boolean;
   clear_previous_results?: boolean;
-  grok_patterns_file_content?: string | null; // Content of the YAML file
-  grok_patterns_file_path_on_server?: string | null; // ADDED: Path to patterns file on server
+  grok_patterns_file_content?: string | null; // Keep as optional for API flexibility, but UI won't send it
+  grok_patterns_file_path_on_server: string; // Now mandatory from UI perspective for run
 }
 
+// ... rest of the file remains the same
 export interface StaticGrokTaskInfo {
   task_id: string;
   message: string;
 }
 
 export interface StaticGrokTaskStatus {
-  task_id: string; // Though task_id is part of URL, good to have it in response too
+  task_id: string;
   status: string;
   progress_detail?: string | null;
   completed: boolean;
   error?: string | null;
   last_updated?: string | null;
-  result_summary?: Record<string, any> | null; // Generic summary for now
+  result_summary?: Record<string, any> | null;
 }
 
 export interface StaticGrokParseStatusItem {
   log_file_id: string;
   group_name?: string | null;
   log_file_relative_path?: string | null;
-  last_line_number_parsed_by_grok: number; // Changed from last_line_parsed_by_grok
+  last_line_number_parsed_by_grok: number;
   last_total_lines_by_collector: number;
   last_parse_timestamp?: string | null;
   last_parse_status?: string | null;
@@ -49,6 +47,7 @@ export interface StaticGrokDeleteRequest {
 }
 
 export interface GrokPatternsFileResponse {
+  // This type is no longer used if endpoints are removed
   filename: string;
   content: string;
   error?: string | null;
@@ -90,6 +89,8 @@ export const deleteStaticGrokParsedData = async (
   });
 };
 
+// getGrokPatternsFile and updateGrokPatternsFile can be removed if their corresponding
+// backend endpoints are removed. For now, I'll leave them, but they are unused by the modified UI.
 export const getGrokPatternsFile =
   async (): Promise<GrokPatternsFileResponse> => {
     return apiClient<GrokPatternsFileResponse>(
@@ -102,16 +103,11 @@ export const updateGrokPatternsFile = async (
 ): Promise<MessageResponse> => {
   const formData = new FormData();
   formData.append("file", file);
-  // For FormData, apiClient needs to handle it without stringifying and set Content-Type to multipart/form-data
-  // The current apiClient might need adjustment for FormData
-  // For now, let's assume apiClient can handle FormData or modify it:
-  // Adjust apiClient or use fetch directly for FormData
   const response = await fetch(
     `${import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api"}${API_PREFIX}/config/grok-patterns`,
     {
       method: "POST",
       body: formData,
-      // Headers will be set automatically by browser for FormData
     },
   );
   if (!response.ok) {
