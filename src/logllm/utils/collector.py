@@ -174,7 +174,7 @@ class Collector:
                     line_number=i,  # This is 0-indexed line number
                     name=log.path,  # Changed log.name to log.path
                     id=log.id,  # This is the stable LogFile ID
-                    timestamp=datetime.now(),
+                    ingestion_timestamp=datetime.now(),
                 )
                 db.insert(
                     line_of_log.to_dict(), cfg.get_log_storage_index(log.belongs_to)
@@ -237,7 +237,7 @@ class Collector:
                             line_number=count,  # current 0-indexed line number
                             name=file_obj.path,
                             id=file_obj.id,  # Stable LogFile ID
-                            timestamp=datetime.now(),
+                            ingestion_timestamp=datetime.now(),
                         )
 
                         action = {
