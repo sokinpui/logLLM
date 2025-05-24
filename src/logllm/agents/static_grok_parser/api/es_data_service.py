@@ -1,21 +1,26 @@
-# src/logllm/agents/static_grok_parser/api/es_data_service.py
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from elasticsearch import ConnectionError, NotFoundError
+from elasticsearch import ConnectionError, NotFoundError  # type: ignore
 
 try:
     from ....config import config as cfg
     from ....utils.database import ElasticsearchDatabase
     from ....utils.logger import Logger
 except ImportError:
+    # This block is for potential direct execution or testing scenarios
+    # Adjust paths as necessary if your testing setup is different
     import os
     import sys
 
-    sys.path.append(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-    from config import config as cfg
-    from utils.database import ElasticsearchDatabase
-    from utils.logger import Logger
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root_guess = os.path.abspath(
+        os.path.join(current_dir, "..", "..", "..", "..", "..")
+    )  # Heuristic
+    sys.path.insert(0, project_root_guess)
+    from src.logllm.config import config as cfg  # type: ignore
+    from src.logllm.utils.database import ElasticsearchDatabase  # type: ignore
+    from src.logllm.utils.logger import Logger  # type: ignore
 
 
 INDEX_STATIC_GROK_PARSE_STATUS = "static_grok_parse_status"
@@ -36,9 +41,18 @@ class ElasticsearchDataService:
                         "mappings": {
                             "properties": {
                                 "log_file_id": {"type": "keyword"},
+                                "group_name": {
+                                    "type": "keyword"
+                                },  # Added for easier filtering
+                                "log_file_relative_path": {
+                                    "type": "keyword"
+                                },  # Added for display
                                 "last_line_number_parsed_by_grok": {"type": "long"},
                                 "last_total_lines_by_collector": {"type": "long"},
                                 "last_parse_timestamp": {"type": "date"},
+                                "last_parse_status": {
+                                    "type": "keyword"
+                                },  # e.g. "completed_new_data"
                             }
                         }
                     },
@@ -76,6 +90,13 @@ class ElasticsearchDataService:
             f"Fetching distinct LogFile IDs for group '{group_name}' from '{source_index_for_group}'"
         )
         try:
+            # Ensure the source index exists before querying
+            if not self._db.instance.indices.exists(index=source_index_for_group):
+                self._logger.warning(
+                    f"Source index '{source_index_for_group}' for group '{group_name}' does not exist. No file IDs to fetch."
+                )
+                return []
+
             distinct_log_file_ids = self._db.get_unique_values_composite(
                 index=source_index_for_group, field="id.keyword"
             )
@@ -102,12 +123,17 @@ class ElasticsearchDataService:
             )
             source = doc.get("_source", {})
             return {
+                "log_file_id": source.get("log_file_id", log_file_id),
+                "group_name": source.get("group_name"),
+                "log_file_relative_path": source.get("log_file_relative_path"),
                 "last_line_parsed_by_grok": source.get(
                     "last_line_number_parsed_by_grok", 0
                 ),
                 "last_total_lines_by_collector": source.get(
                     "last_total_lines_by_collector", 0
                 ),
+                "last_parse_timestamp": source.get("last_parse_timestamp"),
+                "last_parse_status": source.get("last_parse_status"),
             }
         except NotFoundError:
             self._logger.debug(
@@ -142,14 +168,20 @@ class ElasticsearchDataService:
     def save_grok_parse_status_for_file(
         self,
         log_file_id: str,
+        group_name: str,  # Added
+        log_file_relative_path: str,  # Added
         last_line_parsed_by_grok: int,
         current_total_lines_by_collector: int,
+        last_parse_status_str: str,  # Added
     ):
         status_doc = {
             "log_file_id": log_file_id,
+            "group_name": group_name,
+            "log_file_relative_path": log_file_relative_path,
             "last_line_number_parsed_by_grok": last_line_parsed_by_grok,
             "last_total_lines_by_collector": current_total_lines_by_collector,
             "last_parse_timestamp": datetime.now().isoformat(),
+            "last_parse_status": last_parse_status_str,
         }
         update_body = {"doc": status_doc, "doc_as_upsert": True}
         try:
@@ -159,7 +191,7 @@ class ElasticsearchDataService:
                 body=update_body,
             )
             self._logger.debug(
-                f"Saved static Grok parse status for '{log_file_id}': grok_line {last_line_parsed_by_grok}, collector_total {current_total_lines_by_collector}"
+                f"Saved static Grok parse status for '{log_file_id}' in group '{group_name}': line {last_line_parsed_by_grok}, total {current_total_lines_by_collector}, status '{last_parse_status_str}'"
             )
         except Exception as e:
             self._logger.error(
@@ -167,7 +199,7 @@ class ElasticsearchDataService:
                 exc_info=True,
             )
 
-    def fetch_raw_log_line_batch(
+    def fetch_raw_log_line_batch(  # Used by agent's file processing node
         self,
         source_index: str,
         log_file_id: str,
@@ -185,13 +217,13 @@ class ElasticsearchDataService:
             },
             "sort": [{"line_number": "asc"}],
             "size": batch_size,
-            # "_source": ["content", "id", "line_number", "name", "ingestion_timestamp"], # MODIFIED
             "_source": [
                 "content",
                 "id",
                 "line_number",
-                "name",
-            ],  # REMOVED ingestion_timestamp
+                "name",  # This is the relative path from collector
+                # "ingestion_timestamp", # If it exists and you need it
+            ],
         }
         try:
             response = self._db.instance.search(index=source_index, body=query_body)
@@ -227,7 +259,7 @@ class ElasticsearchDataService:
             "id",
             "line_number",
             "name",
-            # "ingestion_timestamp", # REMOVED
+            # "ingestion_timestamp", # If it exists
         ]
 
         total_processed_by_scroll, total_hits_estimate = (
@@ -253,3 +285,85 @@ class ElasticsearchDataService:
                 f"{num_errors} errors occurred during bulk operation. First few: {errors_list[:3]}"
             )
         return success_count, num_errors
+
+    def delete_index_if_exists(self, index_name: str) -> bool:
+        """Deletes an index if it exists. Returns True if deleted or not found, False on error."""
+        self._logger.info(f"Attempting to delete index: {index_name}")
+        try:
+            if self._db.instance.indices.exists(index=index_name):
+                self._db.instance.indices.delete(index=index_name)
+                self._logger.info(f"Successfully deleted index '{index_name}'.")
+                return True
+            else:
+                self._logger.info(
+                    f"Index '{index_name}' does not exist. Nothing to delete."
+                )
+                return True
+        except Exception as e:
+            self._logger.error(
+                f"Failed to delete index '{index_name}': {e}", exc_info=True
+            )
+            return False
+
+    def delete_status_entries_for_file_ids(
+        self, log_file_ids: List[str]
+    ) -> Tuple[int, int]:
+        """Deletes entries from INDEX_STATIC_GROK_PARSE_STATUS by log_file_id."""
+        if not log_file_ids:
+            return 0, 0
+
+        self._logger.info(
+            f"Attempting to delete {len(log_file_ids)} status entries from '{INDEX_STATIC_GROK_PARSE_STATUS}'."
+        )
+        actions = [
+            {
+                "_op_type": "delete",
+                "_index": INDEX_STATIC_GROK_PARSE_STATUS,
+                "_id": log_file_id,
+            }
+            for log_file_id in log_file_ids
+        ]
+        try:
+            success_count, errors = self._db.bulk_operation(
+                actions=actions, raise_on_error=False
+            )
+            if errors:  # errors is a list of error dicts
+                self._logger.warning(
+                    f"Encountered {len(errors)} errors deleting status entries. First error: {errors[0] if errors else 'N/A'}"
+                )
+            self._logger.info(
+                f"Bulk delete from status index: {success_count} succeeded, {len(errors)} failed."
+            )
+            return success_count, len(errors)
+        except Exception as e:
+            self._logger.error(
+                f"Exception during bulk delete of status entries: {e}", exc_info=True
+            )
+            return 0, len(log_file_ids)
+
+    def get_all_status_entries(
+        self, group_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Fetches all entries from INDEX_STATIC_GROK_PARSE_STATUS, optionally filtered by group_name."""
+        query: Dict[str, Any] = {"match_all": {}}
+        if group_name:
+            query = {"term": {"group_name.keyword": group_name}}
+
+        try:
+            self._logger.debug(f"Fetching all status entries with query: {query}")
+            # Using scroll_search from ElasticsearchDatabase to get all hits
+            # The query body should be just the "query" part for scroll_search
+            all_status_docs_hits = self._db.scroll_search(
+                index=INDEX_STATIC_GROK_PARSE_STATUS,
+                query={
+                    "query": query,
+                    "sort": [
+                        {"group_name.keyword": "asc"},
+                        {"log_file_relative_path.keyword": "asc"},
+                    ],
+                },
+            )
+            return [hit.get("_source", {}) for hit in all_status_docs_hits]
+        except Exception as e:
+            self._logger.error(f"Error fetching all status entries: {e}", exc_info=True)
+            return []
