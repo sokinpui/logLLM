@@ -371,7 +371,7 @@ const StaticGrokParserPage: React.FC = () => {
 
       {taskId && (
         <Paper elevation={2} sx={{ p: 2, mb: 3 }}>
-            <Typography variant="h6">Current Task Progress (ID: <Chip label={taskId.substring(0,8)} size="small" color="secondary"/>)</Typography>
+            <Typography variant="h6">Last Task Progress (ID: <Chip label={taskId.substring(0,8)} size="small" color="secondary"/>)</Typography>
           <Typography>Status: <Chip label={taskStatus || 'N/A'} size="small" color={taskStatus === 'Completed' ? 'success' : taskStatus === 'Error' ? 'error' : 'info'} /> </Typography>
           <Typography variant="body2">Details: {taskProgressDetail || 'N/A'}</Typography>
           {taskError && <Alert severity="error" sx={{ mt: 1 }}>Task Error: {taskError}</Alert>}
