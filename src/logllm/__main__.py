@@ -3,9 +3,14 @@ import argparse
 import sys
 
 try:
-    from .cli import es_parse  # Import the new DB parser command file
-    from .cli import parse  # Keep original file parser
-    from .cli import analyze_errors, collect, container, normalize_ts, pm
+    from .cli import (
+        analyze_errors,
+        collect,
+        container,
+        normalize_ts,
+        pm,
+        static_grok_parse,
+    )
 except ImportError as e:
     print(f"Import Error: {e}")
     sys.exit(1)
@@ -13,22 +18,21 @@ except ImportError as e:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="LogLLM Command Line Interface - Manage Containers, Collect, Parse (File/ES), Manage Prompts"  # Updated description
+        description="LogLLM Command Line Interface - Manage Containers, Collect, Parse (Static Grok), Manage Prompts"
     )
-    # Add global --test/--json args if es_parse needs PromptsManager
     parser.add_argument(
         "--verbose", action="store_true", help="Enable global verbose output"
     )
     parser.add_argument(
         "--test",
         action="store_true",
-        help="Use prompts/test.json for pm/parse commands",
+        help="Use prompts/test.json for pm commands",
     )
     parser.add_argument(
         "-j",
         "--json",
         type=str,
-        help="Specify a custom JSON file path for pm/parse commands",
+        help="Specify a custom JSON file path for pm commands",
     )
 
     subparsers = parser.add_subparsers(
@@ -38,8 +42,7 @@ def main():
     # Register command groups
     container.register_container_parser(subparsers)
     collect.register_collect_parser(subparsers)
-    parse.register_parse_parser(subparsers)  # File parser
-    es_parse.register_es_parse_parser(subparsers)  # ES parser << NEW
+    static_grok_parse.register_static_grok_parse_parser(subparsers)
     pm.register_pm_parser(subparsers)
     normalize_ts.register_normalize_ts_parser(subparsers)
     analyze_errors.register_analyze_errors_parser(subparsers)
@@ -49,7 +52,6 @@ def main():
         if hasattr(args, "func"):
             args.func(args)
         else:
-            # Handle cases where subcommands might be missing if not required=True
             parser.print_help()
 
     except Exception as cli_error:

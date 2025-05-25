@@ -3,20 +3,19 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Container, Typography, Grid, TextField, Button, Paper, Box, CircularProgress,
   Alert, Switch, FormControlLabel, Divider, Chip, Accordion, AccordionSummary,
-  AccordionDetails, Tooltip, IconButton, // TextareaAutosize removed
+  AccordionDetails, Tooltip, IconButton,
   TableContainer, Table,
   TableHead, TableRow, TableCell, TableBody, Link as MuiLink,
   useTheme,
   MenuItem
 } from '@mui/material';
-import { lighten } from '@mui/material/styles';
+import { lighten, darken } from '@mui/material/styles'; // Import darken
 
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
-// SaveIcon, FileUploadIcon, FileDownloadIcon removed as editor is gone
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 
 
@@ -30,9 +29,7 @@ const LS_SGROK_PREFIX = 'logllm_staticgrok_';
 const LS_SGROK_RUN_GROUP_NAME = `${LS_SGROK_PREFIX}runGroupName`;
 const LS_SGROK_RUN_ALL_GROUPS = `${LS_SGROK_PREFIX}runAllGroups`;
 const LS_SGROK_CLEAR_PREVIOUS = `${LS_SGROK_PREFIX}clearPrevious`;
-// const LS_SGROK_PATTERNS_CONTENT = `${LS_SGROK_PREFIX}patternsContent`; // REMOVED
 const LS_SGROK_PATTERNS_FILE_PATH = `${LS_SGROK_PREFIX}patternsFilePath`;
-// const LS_SGROK_USE_SERVER_PATH = `${LS_SGROK_PREFIX}useServerPath`; // REMOVED
 const LS_SGROK_SERVER_PATH_CONFIRMED = `${LS_SGROK_PREFIX}serverPathConfirmed`;
 const LS_SGROK_FILTER_STATUS_GROUP = `${LS_SGROK_PREFIX}filterStatusGroup`;
 const LS_SGROK_DELETE_GROUP_NAME = `${LS_SGROK_PREFIX}deleteGroupName`;
@@ -48,9 +45,7 @@ const StaticGrokParserPage: React.FC = () => {
   const [runAllGroups, setRunAllGroups] = useState<boolean>(() => JSON.parse(localStorage.getItem(LS_SGROK_RUN_ALL_GROUPS) || 'true'));
   const [clearPrevious, setClearPrevious] = useState<boolean>(() => JSON.parse(localStorage.getItem(LS_SGROK_CLEAR_PREVIOUS) || 'false'));
 
-  // Removed state for grokPatternsContent, grokPatternsFilename, isPatternsModified
   const [grokPatternsFilePathOnServer, setGrokPatternsFilePathOnServer] = useState<string>(() => localStorage.getItem(LS_SGROK_PATTERNS_FILE_PATH) || '');
-  // useServerPathForPatterns removed, path is now always primary
   const [serverPathConfirmed, setServerPathConfirmed] = useState<boolean>(() => {
     const storedPath = localStorage.getItem(LS_SGROK_PATTERNS_FILE_PATH) || '';
     const storedConfirmed = JSON.parse(localStorage.getItem(LS_SGROK_SERVER_PATH_CONFIRMED) || 'false');
@@ -81,7 +76,6 @@ const StaticGrokParserPage: React.FC = () => {
   const [loadingRun, setLoadingRun] = useState<boolean>(false);
   const [loadingStatusList, setLoadingStatusList] = useState<boolean>(false);
   const [loadingDelete, setLoadingDelete] = useState<boolean>(false);
-  // loadingPatterns removed
   const [pageError, setPageError] = useState<string | null>(null);
   const [pageSuccess, setPageSuccess] = useState<string | null>(null);
 
@@ -89,14 +83,12 @@ const StaticGrokParserPage: React.FC = () => {
   useEffect(() => { localStorage.setItem(LS_SGROK_RUN_GROUP_NAME, runGroupName); }, [runGroupName]);
   useEffect(() => { localStorage.setItem(LS_SGROK_RUN_ALL_GROUPS, JSON.stringify(runAllGroups)); }, [runAllGroups]);
   useEffect(() => { localStorage.setItem(LS_SGROK_CLEAR_PREVIOUS, JSON.stringify(clearPrevious)); }, [clearPrevious]);
-  // grokPatternsContent useEffect removed
   useEffect(() => {
     localStorage.setItem(LS_SGROK_PATTERNS_FILE_PATH, grokPatternsFilePathOnServer);
     if (!grokPatternsFilePathOnServer.trim()) {
         setServerPathConfirmed(false);
     }
   }, [grokPatternsFilePathOnServer]);
-  // useServerPathForPatterns useEffect removed
   useEffect(() => { localStorage.setItem(LS_SGROK_SERVER_PATH_CONFIRMED, JSON.stringify(serverPathConfirmed));}, [serverPathConfirmed]);
   useEffect(() => { localStorage.setItem(LS_SGROK_FILTER_STATUS_GROUP, filterStatusGroup); }, [filterStatusGroup]);
   useEffect(() => { localStorage.setItem(LS_SGROK_DELETE_GROUP_NAME, deleteGroupName); }, [deleteGroupName]);
@@ -123,11 +115,8 @@ const StaticGrokParserPage: React.FC = () => {
     }
   }, []);
 
-  // fetchGrokPatterns (for editor content) removed
-
   useEffect(() => {
     fetchGroupsForDropdown();
-    // No need to fetch patterns for editor anymore
   }, [fetchGroupsForDropdown]);
 
 
@@ -152,7 +141,6 @@ const StaticGrokParserPage: React.FC = () => {
       group_name: runAllGroups ? null : runGroupName.trim() || null,
       clear_previous_results: clearPrevious,
       grok_patterns_file_path_on_server: grokPatternsFilePathOnServer.trim(),
-      // grok_patterns_file_content is no longer sent from this UI
     };
 
     try {
@@ -212,9 +200,6 @@ const StaticGrokParserPage: React.FC = () => {
     }
   };
 
-  // handleSavePatternsToServerDefault removed
-  // handlePatternsTextChange removed
-
   const handleDeleteData = async () => {
     if (!deleteAllGroupsData && !deleteGroupName.trim()) {
         setPageError("Please select a group or 'All Groups' for deletion.");
@@ -231,7 +216,7 @@ const StaticGrokParserPage: React.FC = () => {
         };
         const response = await staticGrokService.deleteStaticGrokParsedData(params);
         setPageSuccess(response.message);
-        handleListStatuses();
+        handleListStatuses(); // Refresh status list after deletion
     } catch (err: any) {
         const apiErr = err as ApiError;
         setPageError(apiErr.detail ? String(apiErr.detail) : 'Failed to delete parsed data.');
@@ -276,7 +261,6 @@ const StaticGrokParserPage: React.FC = () => {
           <Typography variant="h5">Grok Patterns Source</Typography>
         </AccordionSummary>
         <AccordionDetails>
-            {/* Removed Switch for useServerPathForPatterns and TextareaAutosize */}
             <Typography variant="subtitle1" sx={{mb:1}}>
                 Provide the absolute path to your Grok patterns YAML file on the server.
             </Typography>
@@ -305,7 +289,6 @@ const StaticGrokParserPage: React.FC = () => {
                     {serverPathConfirmed ? "Path Confirmed" : "Confirm Path"}
                 </Button>
             </Box>
-            {/* Removed buttons for Save Editor, Reload Editor, Download Editor */}
         </AccordionDetails>
       </Accordion>
 
@@ -354,7 +337,7 @@ const StaticGrokParserPage: React.FC = () => {
                 loadingRun ||
                 isTaskRunning ||
                 (!runAllGroups && !runGroupName.trim()) ||
-                (!grokPatternsFilePathOnServer.trim() || !serverPathConfirmed) // Path must be set and confirmed
+                (!grokPatternsFilePathOnServer.trim() || !serverPathConfirmed)
               }
             >
               {loadingRun || isTaskRunning ? <CircularProgress size={24} color="inherit" /> : <PlayArrowIcon/>}
@@ -467,15 +450,43 @@ const StaticGrokParserPage: React.FC = () => {
         </AccordionDetails>
       </Accordion>
 
-      <Paper elevation={2} sx={{
-          p: 3, mt: 3,
-          backgroundColor: lighten(theme.palette.error.main, 0.85)
-        }}>
-        <Typography variant="h5" gutterBottom color="error.dark">Danger Zone: Delete Parsed Data</Typography>
+      <Paper
+        elevation={2}
+        sx={{
+          p: 3,
+          mt: 3,
+          backgroundColor: theme.palette.mode === 'dark'
+            ? darken(theme.palette.error.dark, 0.5) // Darken further for dark mode
+            : lighten(theme.palette.error.light, 0.85), // Lighten for light mode
+          color: theme.palette.mode === 'dark'
+            ? theme.palette.error.light // Lighter text for dark background
+            : theme.palette.error.dark, // Darker text for light background
+        }}
+      >
+        <Typography
+            variant="h5"
+            gutterBottom
+            // color="error.dark" // Original
+            // Theme-aware text color for title:
+            sx={{ color: theme.palette.mode === 'dark' ? theme.palette.error.light : theme.palette.error.dark }}
+        >
+            Danger Zone: Delete Parsed Data
+        </Typography>
         <Grid container spacing={2} alignItems="center">
             <Grid item xs={12} sm={deleteAllGroupsData ? 12 : 5}>
                 <FormControlLabel
-                control={<Switch checked={deleteAllGroupsData} onChange={(e) => {setDeleteAllGroupsData(e.target.checked); if(e.target.checked) setDeleteGroupName('');}} />}
+                control={<Switch
+                            checked={deleteAllGroupsData}
+                            onChange={(e) => {setDeleteAllGroupsData(e.target.checked); if(e.target.checked) setDeleteGroupName('');}}
+                            sx={{ // Custom switch color for danger zone
+                                '& .MuiSwitch-switchBase.Mui-checked': {
+                                    color: theme.palette.error.main,
+                                },
+                                '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': {
+                                    backgroundColor: theme.palette.error.light,
+                                },
+                            }}
+                         />}
                 label="Delete for ALL Groups"
                 />
             </Grid>
@@ -491,23 +502,53 @@ const StaticGrokParserPage: React.FC = () => {
                         disabled={deleteAllGroupsData}
                         variant="outlined"
                         InputLabelProps={{ shrink: true }}
+                        sx={{ // Ensure dropdown text is readable
+                            '& .MuiInputBase-input': {
+                                color: theme.palette.mode === 'dark' ? theme.palette.text.primary : theme.palette.text.primary,
+                            },
+                             '& .MuiOutlinedInput-root': {
+                                '& fieldset': {
+                                    borderColor: theme.palette.mode === 'dark' ? theme.palette.grey[700] : theme.palette.grey[400],
+                                },
+                                '&:hover fieldset': {
+                                    borderColor: theme.palette.mode === 'dark' ? theme.palette.error.light : theme.palette.error.main,
+                                },
+                            },
+                        }}
                     >
-                        <option value="">-- Select Specific Group --</option>
-                         {allDbGroups.map(g => <option key={`del-${g.group_name}`} value={g.group_name}>{g.group_name}</option>)}
+                        <option value="" style={{color: theme.palette.text.primary, backgroundColor: theme.palette.background.paper}} >
+                            -- Select Specific Group --
+                        </option>
+                         {allDbGroups.map(g => (
+                            <option key={`del-${g.group_name}`} value={g.group_name} style={{color: theme.palette.text.primary, backgroundColor: theme.palette.background.paper}}>
+                                {g.group_name}
+                            </option>
+                        ))}
                     </TextField>
                 </Grid>
             )}
             <Grid item xs={12}>
                 <Button
                     variant="contained"
-                    sx={{ backgroundColor: theme.palette.error.main, '&:hover': {backgroundColor: theme.palette.error.dark}}}
+                    sx={{
+                        backgroundColor: theme.palette.error.main,
+                        color: theme.palette.error.contrastText, // Ensure contrast for button text
+                        '&:hover': {backgroundColor: theme.palette.error.dark}
+                    }}
                     onClick={handleDeleteData}
                     disabled={loadingDelete || (!deleteAllGroupsData && !deleteGroupName.trim())}
                     startIcon={<DeleteForeverIcon />}
                 >
                     {loadingDelete ? <CircularProgress size={24} color="inherit" /> : 'Delete Parsed Data & Status'}
                 </Button>
-                <Typography variant="caption" display="block" color="error.dark" sx={{mt:1}}>
+                <Typography
+                    variant="caption"
+                    display="block"
+                    sx={{
+                        mt:1,
+                        color: theme.palette.mode === 'dark' ? theme.palette.error.light : theme.palette.error.dark
+                    }}
+                >
                     Warning: This will delete `parsed_log_*`, `unparsed_log_*` indices and `static_grok_parse_status` entries for the selected group(s). This action is irreversible.
                 </Typography>
             </Grid>

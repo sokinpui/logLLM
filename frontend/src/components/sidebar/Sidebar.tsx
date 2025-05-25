@@ -17,11 +17,9 @@ import { Link, useLocation } from 'react-router-dom';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import StorageIcon from '@mui/icons-material/Storage';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
-import TextFieldsIcon from '@mui/icons-material/TextFields'; // General parsing
 import SchemaIcon from '@mui/icons-material/Schema'; // For Static Grok Parser
-import ManageSearchIcon from '@mui/icons-material/ManageSearch';
 import PlaylistAddCheckIcon from '@mui/icons-material/PlaylistAddCheck';
-import TimerIcon from '@mui/icons-material/Timer';
+import TimerIcon from '@mui/icons-material/Timer'; // For Normalize TS
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import GroupWorkIcon from '@mui/icons-material/GroupWork';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
@@ -89,12 +87,8 @@ const sidebarItems: SidebarItem[] = [
   { text: 'Container Mgmt', icon: <StorageIcon />, path: '/container' },
   { text: 'Collect Logs', icon: <FolderOpenIcon />, path: '/collect', divider: true },
   { text: 'Group Info', icon: <GroupWorkIcon />, path: '/groups' },
-  // { text: 'File Parser (LLM)', icon: <TextFieldsIcon />, path: '/file-parser' },
-  { text: 'ES Parser (LLM)', icon: <ManageSearchIcon />, path: '/es-parser' },
-  { text: 'Static Grok Parser', icon: <SchemaIcon />, path: '/static-grok-parser', divider: true }, // ADDED
-  // { text: 'Normalize TS', icon: <TimerIcon />, path: '/normalize-ts' },
-  // { text: 'Analyze Errors', icon: <ErrorOutlineIcon />, path: '/analyze-errors', divider: true },
-  // { text: 'Prompts Manager', icon: <PlaylistAddCheckIcon />, path: '/prompts-manager' },
+  { text: 'Static Grok Parser', icon: <SchemaIcon />, path: '/static-grok-parser' },
+  { text: 'Normalize TS', icon: <TimerIcon />, path: '/normalize-ts', divider: true },
 ];
 
 interface SidebarProps {
@@ -122,7 +116,7 @@ const Sidebar: React.FC<SidebarProps> = ({ open, handleDrawerClose, handleDrawer
               <ListItemButton
                 component={Link}
                 to={item.path}
-                selected={location.pathname === item.path || (item.path === "/" && location.pathname.startsWith("/dashboard"))} // Adjust selection logic if needed
+                selected={location.pathname === item.path || (item.path === "/" && location.pathname.startsWith("/dashboard"))}
                 sx={{
                   minHeight: 48,
                   justifyContent: open ? 'initial' : 'center',
@@ -159,12 +153,5 @@ const Sidebar: React.FC<SidebarProps> = ({ open, handleDrawerClose, handleDrawer
     </StyledDrawer>
   );
 };
-
-// REMOVE THE REDECLARATIONS FROM HERE
-// openedMixin = (theme: any) => ({ /* ... */ });
-// closedMixin = (theme: any) => ({ /* ... */ });
-// StyledDrawer = styled(Drawer, { shouldForwardProp: (prop) => prop !== 'open' })( /* ... */ );
-// DrawerHeader = styled('div')(({ theme }) => ({ /* ... */ }));
-
 
 export default Sidebar;

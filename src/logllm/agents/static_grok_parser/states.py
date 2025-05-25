@@ -1,5 +1,7 @@
 # src/logllm/agents/static_grok_parser/states.py
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional
+
+from typing_extensions import TypedDict  # MODIFIED
 
 # from pygrok import Grok # Avoid importing Grok here if state needs to be pickled for multiprocessing
 
