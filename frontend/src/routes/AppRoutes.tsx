@@ -10,7 +10,6 @@ import CollectPage from '../pages/CollectPage';
 import ContainerPage from '../pages/ContainerPage';
 import GroupInfoPage from '../pages/GroupInfoPage';
 import NormalizeTsPage from '../pages/NormalizeTsPage';
-import PromptsManagerPage from '../pages/PromptsManagerPage';
 import StaticGrokParserPage from '../pages/StaticGrokParserPage';
 import NotFoundPage from '../pages/NotFoundPage';
 
@@ -24,8 +23,7 @@ const AppRoutes: React.FC = () => {
         <Route path="/container" element={<ContainerPage />} />
         <Route path="/groups" element={<GroupInfoPage />} />
         <Route path="/static-grok-parser" element={<StaticGrokParserPage />} />
-        <Route path="/normalize-ts" element={<NormalizeTsPage />} /> {/* ADDED */}
-        <Route path="/prompts-manager" element={<PromptsManagerPage />} />
+        <Route path="/normalize-ts" element={<NormalizeTsPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>
