@@ -24,6 +24,7 @@ import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import GroupWorkIcon from '@mui/icons-material/GroupWork';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import InsightsIcon from '@mui/icons-material/Insights';
 
 const drawerWidth = 240;
 
@@ -89,6 +90,7 @@ const sidebarItems: SidebarItem[] = [
   { text: 'Group Info', icon: <GroupWorkIcon />, path: '/groups' },
   { text: 'Static Grok Parser', icon: <SchemaIcon />, path: '/static-grok-parser' },
   { text: 'Normalize TS', icon: <TimerIcon />, path: '/normalize-ts', divider: true },
+  { text: 'Analyze Errors', icon: <InsightsIcon />, path: '/analyze-errors', divider: true },
 ];
 
 interface SidebarProps {

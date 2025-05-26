@@ -87,7 +87,7 @@ INDEX_GROK_RESULTS_HISTORY = "grok_results_history"
 # LLM model
 # ==========================
 # gemini model
-GEMINI_LLM_MODEL = "gemini-2.5-flash-preview-04-17"
+GEMINI_LLM_MODEL = "gemini-2.0-flash-lite"
 
 
 # ==========================
