@@ -2,18 +2,16 @@
 import argparse
 import json
 import sys
+from datetime import datetime, timedelta, timezone
+from typing import List, Optional
 
 try:
-    from ..agents.error_analysis_pipeline_agent import (
-        ErrorAnalysisPipelineAgent,
-        ErrorAnalysisPipelineState,
-    )
+    from ..agents.error_summarizer import ErrorSummarizerAgent
+    from ..agents.error_summarizer.states import ErrorSummarizerAgentState
     from ..config import config as cfg
-    from ..data_schemas.error_analysis import ErrorSummarySchema
     from ..utils.database import ElasticsearchDatabase
-    from ..utils.llm_model import GeminiModel  # Ensure GeminiModel is imported
+    from ..utils.llm_model import GeminiModel
     from ..utils.logger import Logger
-    from ..utils.prompts_manager import PromptsManager
 except ImportError as e:
     print(f"Error importing modules for 'analyze-errors' CLI: {e}", file=sys.stderr)
     sys.exit(1)
@@ -21,274 +19,258 @@ except ImportError as e:
 logger = Logger()
 
 
-def handle_analyze_errors_run(args):
-    logger.info(
-        f"Executing analyze-errors run: group='{args.group}', time_window='{args.time_window}', levels='{args.log_levels}', max_initial='{args.max_initial_errors}', max_cluster_docs='{args.max_docs_for_clustering}'"
-    )
-    print(f"Starting error analysis for group '{args.group}'...")
-    working_index_name = cfg.get_error_analysis_working_index(args.group)
+def valid_iso_timestamp(s_val):
+    try:
+        if s_val.endswith("Z"):
+            dt = datetime.fromisoformat(s_val[:-1] + "+00:00")
+        else:
+            dt = datetime.fromisoformat(s_val)
+        return s_val
+    except ValueError:
+        msg = f"Not a valid ISO 8601 timestamp: '{s_val}'. Expected format e.g., YYYY-MM-DDTHH:MM:SSZ or YYYY-MM-DDTHH:MM:SS+00:00"
+        raise argparse.ArgumentTypeError(msg)
+
+
+def _print_run_summary_cli(final_state: ErrorSummarizerAgentState, group_name: str):
+    print(f"\n--- Error Summarization for Group '{group_name}' (CLI) ---")
+    agent_status = final_state.get("agent_status", "Status Unknown")
+    print(f"Overall Agent Status: {agent_status}")
+
+    error_messages = final_state.get("error_messages", [])
+    if error_messages:
+        print("Agent Errors/Warnings:")
+        for err in error_messages:
+            print(f"  - {err}")
+
+    raw_logs_count = len(final_state.get("raw_error_logs", []))
+    print(f"\nFetched {raw_logs_count} error logs for processing based on criteria.")
+
+    cluster_assignments = final_state.get("cluster_assignments")
+    if cluster_assignments is not None:
+        from collections import Counter
+
+        print(
+            f"Cluster assignments overview: {Counter(cluster_assignments).most_common()}"
+        )
+    else:
+        print("Cluster assignments: Not available (possibly skipped or failed).")
+
     print(
-        f"Fetched errors will be temporarily stored in index: '{working_index_name}' (deleted on next run for this group)."
+        f"\nProcessed Cluster Details & Summaries (Target Index: {final_state.get('target_summary_index')}):"
     )
+    processed_details = final_state.get("processed_cluster_details", [])
+    if not processed_details:
+        print("  No clusters were processed or summarized.")
+
+    for i, cluster_detail in enumerate(processed_details):
+        cluster_label = cluster_detail.get("cluster_label", f"Unknown Cluster {i+1}")
+        print(f"\n  Cluster/Group: {cluster_label}")
+        print(
+            f"    Total Logs in this specific group/cluster: {cluster_detail.get('total_logs_in_cluster')}"
+        )
+        print(
+            f"    Time Range: {cluster_detail.get('cluster_time_range_start', 'N/A')} to {cluster_detail.get('cluster_time_range_end', 'N/A')}"
+        )
+        print(
+            f"    Summary Generated Successfully: {cluster_detail.get('summary_generated', False)}"
+        )
+
+        summary_output_dict = cluster_detail.get("summary_output")
+        if summary_output_dict:
+            print(f"      LLM Summary: \"{summary_output_dict.get('summary', 'N/A')}\"")
+            print(
+                f"      Potential Cause: \"{summary_output_dict.get('potential_cause', 'N/A')}\""
+            )
+            print(f"      Keywords: {summary_output_dict.get('keywords', [])}")
+            print(
+                f"      Representative Log: \"{summary_output_dict.get('representative_log_line', 'N/A')}\""
+            )
+
+        summary_es_id = cluster_detail.get("summary_document_id_es")
+        if summary_es_id:
+            print(f"    Summary Stored in ES (ID): {summary_es_id}")
+
+        sampled_logs_content = cluster_detail.get("sampled_log_messages_used", [])
+        print(
+            f"    Number of Sampled Log Messages Used for LLM: {len(sampled_logs_content)}"
+        )
+
+    final_summary_ids_count = len(final_state.get("final_summary_ids", []))
+    print(
+        f"\nTotal summary documents created in Elasticsearch: {final_summary_ids_count}"
+    )
+    print("--- End of Error Summarization Report (CLI) ---")
+
+
+def handle_analyze_errors_run_summary(args):
+    action_description = "Run Error Log Summarization"
+    logger.info(
+        f"Executing {action_description}: group='{args.group}', "
+        f"start='{args.start_time}', end='{args.end_time}', "
+        f"levels='{args.error_levels}', max_logs={args.max_logs}"  # error_levels here is the raw string from args
+    )
+    print(f"Starting {action_description} for group '{args.group}'...")
 
     try:
-        db = ElasticsearchDatabase()
-        if db.instance is None:
-            print("Error: Could not connect to Elasticsearch.")
-            logger.error("ES connection failed in handle_analyze_errors_run.")
+        db_main = ElasticsearchDatabase()
+        if not db_main.instance:
+            logger.error("CLI: Elasticsearch connection failed. Cannot proceed.")
+            print("Error: Could not connect to Elasticsearch.", file=sys.stderr)
             return
 
-        json_file_path = getattr(args, "json", None) or (
-            "prompts/test.json"
-            if getattr(args, "test", False)
-            else "prompts/prompts.json"
-        )
-        prompts_manager = PromptsManager(json_file=json_file_path)
-        llm_model = GeminiModel()  # Using GeminiModel directly
-
-        pipeline_agent = ErrorAnalysisPipelineAgent(
-            db=db, llm_model=llm_model, prompts_manager=prompts_manager
-        )
-
-        must_clauses = []
-        log_level_field_keyword = (
-            "level.keyword"  # Default, ensure this matches your Grok output
-        )
-
-        if args.log_levels:
-            levels = [
-                level.strip().lower() for level in args.log_levels.split(",")
-            ]  # Convert to lowercase
-            logger.debug(
-                f"Querying for log levels: {levels} on field '{log_level_field_keyword}'"
+        llm_instance_cli = None
+        if args.llm_model:
+            logger.info(
+                f"CLI: Using specified LLM model for summarization: {args.llm_model}"
             )
-            must_clauses.append({"terms": {log_level_field_keyword: levels}})
-        else:
+            llm_instance_cli = GeminiModel(model_name=args.llm_model)
+
+        agent = ErrorSummarizerAgent(db=db_main, llm_model_instance=llm_instance_cli)
+
+        # Prepare error_levels list by converting to lowercase
+        error_levels_list = [
+            level.strip().lower()
+            for level in args.error_levels.split(",")
+            if level.strip()
+        ]  # CHANGED to .lower()
+        if not error_levels_list:
             logger.warning(
-                "No specific log levels provided for filtering, relying on CLI default or matching all if default is empty."
+                "CLI: No valid error levels provided after parsing. Using default (lowercase)."
             )
+            error_levels_list = list(
+                cfg.DEFAULT_ERROR_LEVELS
+            )  # Defaults are now lowercase
 
-        time_filter = {"range": {"@timestamp": {"gte": args.time_window, "lte": "now"}}}
+        logger.info(f"Processed error levels for query: {error_levels_list}")
 
-        es_query = {
-            "query": {
-                "bool": {
-                    "must": must_clauses,
-                    "filter": [time_filter],
-                }
-            },
-            "size": args.max_initial_errors,
-            "_source": [
-                "message",
-                "@timestamp",
-                "level",  # Make sure 'level' exists, not 'level.keyword' in _source
-                "class_name",  # If it exists
-                "thread_name",  # If it exists
-            ],
-            "sort": [{"@timestamp": "desc"}],
-        }
-
-        if not must_clauses:
-            logger.error(
-                "The 'must_clauses' for log level filtering is empty. This will retrieve all logs in the time window. Please specify valid --log-levels."
-            )
-
-        logger.debug(f"Constructed ES Query: {json.dumps(es_query, indent=2)}")
-
-        initial_pipeline_state: ErrorAnalysisPipelineState = {
-            "group_name": args.group,
-            "es_query_for_errors": es_query,
-            "clustering_params": {
-                "method": args.clustering_method,
+        final_state = agent.run(
+            group_name=args.group,
+            start_time_iso=args.start_time,
+            end_time_iso=args.end_time,
+            error_log_levels=error_levels_list,
+            max_logs_to_process=args.max_logs,
+            embedding_model_name=args.embedding_model,
+            llm_model_for_summary=args.llm_model,
+            clustering_params={
                 "eps": args.dbscan_eps,
                 "min_samples": args.dbscan_min_samples,
-                "max_docs_for_clustering": args.max_docs_for_clustering,  # Pass new arg
             },
-            "sampling_params": {
+            sampling_params={
                 "max_samples_per_cluster": args.max_samples_per_cluster,
                 "max_samples_unclustered": args.max_samples_unclustered,
             },
-            "error_log_docs": [],
-            "clusters": None,
-            "current_cluster_index": 0,
-            "current_samples_for_summary": [],
-            "generated_summaries": [],
-            "status_messages": [],
-        }
-
-        final_state = pipeline_agent.run(initial_pipeline_state)
-
-        print("\n--- Error Analysis Pipeline Summary ---")
-        print(f"Group: {args.group}")
-        print("Status Messages:")
-        for msg in final_state.get("status_messages", []):
-            print(f"  - {msg}")
-
-        print(
-            f"\nGenerated Summaries ({len(final_state.get('generated_summaries',[]))}):"
+            target_summary_index=args.output_index,
         )
-        if final_state.get("generated_summaries"):
-            for summary_idx, summary_data in enumerate(
-                final_state.get("generated_summaries", [])
-            ):
-                print("-" * 20)
-                print(f"  Summary {summary_idx + 1}:")
-                print(f"    Category: {summary_data.error_category}")
-                print(f"    Description: {summary_data.concise_description}")
-                print(
-                    f"    Original Count (Cluster/Batch): {summary_data.original_cluster_count}"
-                )
-        else:
-            print("  (No summaries were generated)")
-
-        print("\nAnalysis complete. Summaries stored in Elasticsearch (if any).")
+        _print_run_summary_cli(final_state, args.group)
 
     except Exception as e:
-        logger.error(f"Critical error during analyze-errors run: {e}", exc_info=True)
-        print(f"An error occurred: {e}")
-
-
-def handle_analyze_errors_list(args):
-    logger.info(
-        f"Executing analyze-errors list: group='{args.group}', latest={args.latest}"
-    )
-    try:
-        db = ElasticsearchDatabase()
-        if db.instance is None:
-            print("Error: Could not connect to Elasticsearch.")
-            return
-
-        query_body: Dict[str, Any] = {
-            "sort": [{"analysis_timestamp": "desc"}]
-        }  # Corrected field name
-        if args.group:
-            query_body["query"] = {"term": {"group_name.keyword": args.group}}
-        else:
-            query_body["query"] = {"match_all": {}}
-
-        if args.latest:
-            query_body["size"] = args.latest
-
-        results = db.scroll_search(index=cfg.INDEX_ERROR_SUMMARIES, query=query_body)
-
-        if not results:
-            print("No error summaries found.")
-            return
-
-        print(f"\n--- Stored Error Summaries ({len(results)} entries) ---")
-        for hit in results:
-            summary_data = hit["_source"]
-            try:
-                summary = ErrorSummarySchema.model_validate(summary_data)
-                print("-" * 30)
-                print(
-                    f"Group: {summary.group_name} (Analyzed: {summary.analysis_timestamp})"
-                )
-                print(f"Category: {summary.error_category}")
-                print(f"Description: {summary.concise_description}")
-                print(f"Potential Causes: {', '.join(summary.potential_root_causes)}")
-                print(f"Impact: {summary.estimated_impact}")
-                print(f"Keywords: {', '.join(summary.suggested_keywords)}")
-                if summary.original_cluster_count is not None:
-                    print(
-                        f"Original Logs Count (in cluster/batch): {summary.original_cluster_count}"
-                    )
-                print(f"Input Examples: {summary.num_examples_in_summary_input}")
-
-            except Exception as p_err:
-                logger.warning(
-                    f"Could not parse summary from ES with Pydantic: {p_err}. Raw data: {summary_data}"
-                )
-                print(json.dumps(summary_data, indent=2))
-
-    except Exception as e:
-        logger.error(f"Error listing summaries: {e}", exc_info=True)
-        print(f"An error occurred: {e}")
+        logger.error(
+            f"CLI: A critical error occurred during {action_description}: {e}",
+            exc_info=True,
+        )
+        print(
+            f"\nAn critical error occurred during '{action_description}': {e}",
+            file=sys.stderr,
+        )
 
 
 def register_analyze_errors_parser(subparsers):
-    parser = subparsers.add_parser(
+    analyze_parser_main = subparsers.add_parser(
         "analyze-errors",
-        help="Analyze and summarize error logs from Elasticsearch.",
-        description="Filters, clusters (optional), samples, and uses LLM to summarize error logs.",
-    )
-    action_subparsers = parser.add_subparsers(
-        dest="analyze_errors_action", required=True
+        help="Analyze error logs using LLMs: summarize errors for a group within a time window.",
+        description="Provides subcommands to analyze error logs stored in Elasticsearch's parsed_log_* indices.",
     )
 
-    run_parser = action_subparsers.add_parser(
-        "run", help="Run the error analysis pipeline."
-    )
-    run_parser.add_argument(
-        "-g", "--group", type=str, required=True, help="Log group name to analyze."
-    )
-    run_parser.add_argument(
-        "--time-window",
-        type=str,
-        default="now-24h",
-        help="Time window for fetching errors (e.g., 'now-1h', 'now-7d').",
-    )
-    run_parser.add_argument(
-        "--log-levels",
-        type=str,
-        default="ERROR,CRITICAL,FATAL",  # Default error levels
-        help="Comma-separated log levels to filter for (case-insensitive).",
-    )
-    run_parser.add_argument(
-        "--max-initial-errors",
-        type=int,
-        default=5000,
-        help="Max error logs to fetch initially for analysis.",
-    )
-    run_parser.add_argument(
-        "--max-docs-for-clustering",  # New argument
-        type=int,
-        default=cfg.DEFAULT_MAX_DOCS_FOR_CLUSTERING,
-        help=f"Maximum documents to use for clustering step (default: {cfg.DEFAULT_MAX_DOCS_FOR_CLUSTERING}).",
+    ae_subparsers = analyze_parser_main.add_subparsers(
+        dest="analyze_errors_action",
+        help="Action to perform for error analysis",
+        required=True,
     )
 
-    run_parser.add_argument(
-        "--clustering-method",
-        type=str,
-        default="embedding_dbscan",
-        choices=["embedding_dbscan", "none"],
-        help="Clustering method.",
+    run_summary_parser = ae_subparsers.add_parser(
+        "run-summary",
+        help="Run error log summarization for a specific group and time window.",
+        description="Fetches error logs based on level and time, (optionally clusters them), samples representative logs, and generates LLM-based summaries which are stored in Elasticsearch.",
     )
-    run_parser.add_argument(
+    run_summary_parser.add_argument(
+        "-g",
+        "--group",
+        type=str,
+        required=True,
+        help="Specify the single group name to process (e.g., 'apache', 'system_kernel'). This corresponds to a 'parsed_log_<group>' index.",
+    )
+
+    default_end_time_dt = datetime.now(timezone.utc)
+    default_start_time_dt = default_end_time_dt - timedelta(days=1)
+    run_summary_parser.add_argument(
+        "--start-time",
+        type=valid_iso_timestamp,
+        default=default_start_time_dt.isoformat(),
+        help=f"Start timestamp for log query in ISO 8601 format (e.g., YYYY-MM-DDTHH:MM:SSZ). Default: 24 hours ago.",
+    )
+    run_summary_parser.add_argument(
+        "--end-time",
+        type=valid_iso_timestamp,
+        default=default_end_time_dt.isoformat(),
+        help=f"End timestamp for log query in ISO 8601 format. Default: now.",
+    )
+    run_summary_parser.add_argument(
+        "--error-levels",
+        type=str,
+        default=",".join(cfg.DEFAULT_ERROR_LEVELS),
+        help=f"Comma-separated list of log levels to consider as errors (e.g., 'error,critical,warn'). Input will be lowercased. Default: {','.join(cfg.DEFAULT_ERROR_LEVELS)}",
+    )
+    run_summary_parser.add_argument(
+        "--max-logs",
+        type=int,
+        default=cfg.DEFAULT_MAX_LOGS_FOR_SUMMARY,
+        help=f"Maximum number of error logs to fetch and process from the time window. Default: {cfg.DEFAULT_MAX_LOGS_FOR_SUMMARY}",
+    )
+
+    run_summary_parser.add_argument(
+        "--embedding-model",
+        type=str,
+        default=cfg.DEFAULT_EMBEDDING_MODEL_FOR_SUMMARY,  # defaults to "sentence-transformers/all-MiniLM-L6-v2"
+        help=(
+            "Name/path of the embedding model. Can be a Google API model (e.g., 'models/text-embedding-004') "
+            "or a local Sentence Transformer model (e.g., 'sentence-transformers/all-MiniLM-L6-v2'). "
+            f"Default: {cfg.DEFAULT_EMBEDDING_MODEL_FOR_SUMMARY}"
+        ),  # UPDATED HELP TEXT
+    )
+    run_summary_parser.add_argument(
+        "--llm-model",
+        type=str,
+        default=cfg.DEFAULT_LLM_MODEL_FOR_SUMMARY_GENERATION,
+        help=f"Name of the LLM model for generating summaries. Default: {cfg.DEFAULT_LLM_MODEL_FOR_SUMMARY_GENERATION}",
+    )
+    run_summary_parser.add_argument(
         "--dbscan-eps",
         type=float,
-        default=cfg.DEFAULT_DBSCAN_EPS,
-        help="DBSCAN epsilon parameter.",
+        default=cfg.DEFAULT_DBSCAN_EPS_FOR_SUMMARY,
+        help=f"DBSCAN epsilon parameter for clustering. Affects how close points need to be. Default: {cfg.DEFAULT_DBSCAN_EPS_FOR_SUMMARY}",
     )
-    run_parser.add_argument(
+    run_summary_parser.add_argument(
         "--dbscan-min-samples",
         type=int,
-        default=cfg.DEFAULT_DBSCAN_MIN_SAMPLES,
-        help="DBSCAN min_samples parameter.",
+        default=cfg.DEFAULT_DBSCAN_MIN_SAMPLES_FOR_SUMMARY,
+        help=f"DBSCAN min_samples parameter for clustering. Min points to form a dense region. Default: {cfg.DEFAULT_DBSCAN_MIN_SAMPLES_FOR_SUMMARY}",
     )
-
-    run_parser.add_argument(
+    run_summary_parser.add_argument(
         "--max-samples-per-cluster",
         type=int,
         default=cfg.DEFAULT_MAX_SAMPLES_PER_CLUSTER_FOR_SUMMARY,
-        help="Max log samples from a cluster to feed LLM.",
+        help=f"Maximum log samples to take from each identified cluster for LLM summary. Default: {cfg.DEFAULT_MAX_SAMPLES_PER_CLUSTER_FOR_SUMMARY}",
     )
-    run_parser.add_argument(
+    run_summary_parser.add_argument(
         "--max-samples-unclustered",
         type=int,
         default=cfg.DEFAULT_MAX_SAMPLES_UNCLUSTERED_FOR_SUMMARY,
-        help="Max log samples if not clustered to feed LLM.",
+        help=f"Maximum log samples to take from unclustered (outlier) logs for LLM summary. Default: {cfg.DEFAULT_MAX_SAMPLES_UNCLUSTERED_FOR_SUMMARY}",
     )
-
-    run_parser.set_defaults(func=handle_analyze_errors_run)
-
-    list_parser = action_subparsers.add_parser(
-        "list", help="List previously generated error summaries."
+    run_summary_parser.add_argument(
+        "--output-index",
+        type=str,
+        default=cfg.INDEX_ERROR_SUMMARIES,
+        help=f"Elasticsearch index to store the generated summaries. Default: {cfg.INDEX_ERROR_SUMMARIES}",
     )
-    list_parser.add_argument(
-        "-g", "--group", type=str, help="Filter summaries by group name."
-    )
-    list_parser.add_argument(
-        "--latest", type=int, help="Show only the N latest summaries."
-    )
-    list_parser.set_defaults(func=handle_analyze_errors_list)
+    run_summary_parser.set_defaults(func=handle_analyze_errors_run_summary)

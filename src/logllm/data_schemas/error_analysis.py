@@ -1,8 +1,9 @@
-# src/logllm/data_schemas/error_analysis.py (NEW FILE)
+# src/logllm/data_schemas/error_analysis.py
 from datetime import datetime
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
+from typing_extensions import TypedDict
 
 
 class LogDocument(TypedDict):

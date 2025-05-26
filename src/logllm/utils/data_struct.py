@@ -1,8 +1,13 @@
+# src/logllm/utils/data_struct.py
+import hashlib  # Added import
+import os  # Added import
+from dataclasses import asdict, dataclass
 from datetime import datetime
-from dataclasses import dataclass, asdict
 
-from .database import ElasticsearchDatabase as eldb
 from ..config import config as cfg
+from .database import (
+    ElasticsearchDatabase as eldb,  # Assuming eldb is still needed here for LogFile methods
+)
 
 
 @dataclass
@@ -14,58 +19,76 @@ class BaseData:
 @dataclass
 class LineOfLogFile(BaseData):
     content: str
-    line_number: int
-    name: str
-    id: int
-    timestamp: datetime
-
-    def to_dict(self):
-        data = asdict(self)
-        # Convert datetime objects to strings
-        if isinstance(data["timestamp"], datetime):
-            data["timestamp"] = data[
-                "timestamp"
-            ].isoformat()  # Convert to ISO 8601 format
-        return data
+    line_number: int  # 0-indexed line number in the file
+    name: str  # Full path of the log file
+    id: str  # Stable ID of the LogFile (hash of its path)
+    # ingestion_timestamp: datetime  # Timestamp of when this line was processed/inserted
 
 
 @dataclass
 class LastLineRead(BaseData):
-    last_line_read: int
-    id: int
-    name: str
+    last_line_read: int  # The number of lines read previously (i.e., next line to read is 0-indexed last_line_read)
+    id: str  # Stable ID of the LogFile (hash of its path)
+    name: str  # Full path of the log file
 
 
 class LogFile:
-    file_id = 0
+    # file_id = 0 # Class variable for auto-incrementing ID is removed
 
     def __init__(self, filename: str, parent: str):
-        self.id = LogFile.file_id
-        LogFile.file_id += 1
+        # Ensure path is absolute and normalized for consistent hashing and storage
+        self.path: str = os.path.abspath(os.path.normpath(filename))
 
-        self.belongs_to = parent
-        self.path = filename
-        self.description = ""
-        self.related_events = []
+        # Create a stable ID based on the file path
+        self.id: str = hashlib.md5(self.path.encode("utf-8")).hexdigest()
+
+        self.belongs_to: str = parent
+        self.description: str = ""
+        self.related_events: list = []  # Initialize as list
 
     def add_file_description(self, description: str):
-        description.strip()
+        description = description.strip()  # Ensure description is stripped
         self.description = description
 
     def to_dict(self) -> dict:
-        return self.__dict__
+        # Only include relevant fields for storage if LogFile itself is stored
+        return {
+            "id": self.id,
+            "path": self.path,
+            "belongs_to": self.belongs_to,
+            "description": self.description,
+            # related_events might be complex; decide if/how to store
+        }
 
     def get_total_lines(self, db: eldb) -> int:
-        search_query = {"query": {"term": {"id": self.id}}}
+        # This counts documents in ES, which might not be the physical line count
+        # if some lines were skipped or if there are multiple entries per line number (not typical).
+        # It's more like "total processed log entries for this file ID".
+        search_query = {
+            "query": {"term": {"id.keyword": self.id}}
+        }  # Assuming 'id' is mapped as keyword for term query
 
-        count_response = db.instance.search(
-            index=cfg.INDEX_LOG_FILES_STORAGE, body=search_query, size=0
-        )
-
-        return count_response["hits"]["total"]["value"]
+        try:
+            count_response = db.instance.count(  # Using count API directly
+                index=cfg.get_log_storage_index(
+                    self.belongs_to
+                ),  # Query the correct data index
+                body=search_query.get(
+                    "query"
+                ),  # Pass only the query part to body of count
+            )
+            return count_response["count"]
+        except Exception as e:
+            # logger instance would be good here
+            print(f"Error getting total lines for {self.path} (ID: {self.id}): {e}")
+            return 0
 
     def get_snapshot(
-        self, id: int, earliest_timestamp: datetime, start: int, size: int, db: eldb
+        self,
+        earliest_timestamp: datetime,
+        start: int,
+        size: int,
+        db: eldb,  # Removed id param, use self.id
     ) -> str | None:
         """
         Get a snapshot of the log file from the database
@@ -73,74 +96,60 @@ class LogFile:
         """
 
         query = {
-            "size": 1000,  # Fetch in chunks
+            "size": size,  # Fetch only the required 'size'
+            "from": start,  # Start from the 'start' line number (if 0-indexed)
             "query": {
                 "bool": {
                     "must": [
+                        # { # Timestamp filter might not be what's desired for a direct line number snapshot
+                        #     "range": {
+                        #         "timestamp": { # This is processing timestamp, not log's internal timestamp
+                        #             "gt": earliest_timestamp.strftime(
+                        #                 "%Y-%m-%dT%H:%M:%S"
+                        #             )
+                        #         }
+                        #     }
+                        # },
                         {
-                            "range": {
-                                "timestamp": {
-                                    "gt": earliest_timestamp.strftime(
-                                        "%Y-%m-%dT%H:%M:%S"
-                                    )
-                                }
-                            }
-                        },
-                        {"match": {"id": id}},
+                            "match": {"id.keyword": self.id}
+                        },  # Match on the LogFile ID (hash)
                     ]
                 }
             },
-            "sort": [
-                {"line_number": "asc"}
-            ],  # Sort by line number instead of timestamp
-            "_source": ["line_number", "content"],  # Only fetch necessary fields
+            "sort": [{"line_number": "asc"}],  # Sort by actual line_number field
+            "_source": ["line_number", "content"],
         }
 
-        # use scroll api to fetch all lines
-        response = db.instance.search(
-            index=cfg.INDEX_LOG_FILES_STORAGE, body=query, scroll="2m"
-        )
-        scroll_id = response["_scroll_id"]
-        scroll_size = len(response["hits"]["hits"])
+        log_lines = []
+        try:
+            # Simpler search as we expect 'size' to be manageable for a snapshot
+            response = db.instance.search(
+                index=cfg.get_log_storage_index(self.belongs_to), body=query
+            )
 
-        log_data = {}
-
-        while scroll_size > 0:
             for hit in response["hits"]["hits"]:
-                log_data[hit["_source"]["line_number"]] = hit["_source"]["content"]
-            response = db.instance.scroll(scroll_id=scroll_id, scroll="2m")
-            scroll_id = response["_scroll_id"]
-            scroll_size = len(response["hits"]["hits"])
+                log_lines.append(
+                    f"{hit['_source']['line_number']}: {hit['_source']['content']}"
+                )
 
-        # Clear the scroll context in Elasticsearch
-        db.instance.clear_scroll(scroll_id=scroll_id)
+        except Exception as e:
+            # logger instance useful here
+            print(f"Error getting snapshot for {self.path} (ID: {self.id}): {e}")
+            return None
 
-        def to_string(log_data: dict) -> str | None:
-            log_string = ""
-            for line_number, content in log_data.items():
-                log_string += f"{line_number}: {content}"
-
-            return log_string
-
-        # If there's not enough data, return all available logs
-        if len(log_data) <= (size):
-            return to_string(log_data)
-
-        snapshot = {}
-        for i in range(start, start + size):
-            snapshot[i] = log_data[i]
-
-        return to_string(snapshot)
+        return "".join(log_lines) if log_lines else None
 
 
 class Event:
-    event_id = 0
+    event_id_counter = 0  # Use a more descriptive name
 
     def __init__(self, description: str):
-        Event.event_id += 1
-        self.id = Event.event_id
-        self.description = description
-        self.related_files = []
+        Event.event_id_counter += 1
+        self.id: int = (
+            Event.event_id_counter
+        )  # This ID is for events, separate from LogFile.id
+        self.description: str = description
+        self.related_files: list = []  # Initialize as list
 
     def to_dict(self) -> dict:
         return self.__dict__

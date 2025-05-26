@@ -87,7 +87,7 @@ INDEX_GROK_RESULTS_HISTORY = "grok_results_history"
 # LLM model
 # ==========================
 # gemini model
-GEMINI_LLM_MODEL = "gemini-2.5-flash-preview-04-17"
+GEMINI_LLM_MODEL = "gemini-2.0-flash-lite"
 
 
 # ==========================
@@ -144,24 +144,13 @@ def get_normalized_parsed_log_storage_index(group: str) -> str:
 # Index for storing LLM-generated error summaries
 INDEX_ERROR_SUMMARIES = "log_error_summaries"
 
-# Default clustering parameters (can be overridden by CLI)
-DEFAULT_CLUSTERING_EMBEDDING_MODEL = (
-    "models/text-embedding-004"  # Or your preferred embedding model
-)
-DEFAULT_DBSCAN_EPS = 0.5  # Epsilon for DBSCAN (adjust based on embedding space)
-DEFAULT_DBSCAN_MIN_SAMPLES = 3  # Min samples for DBSCAN
-DEFAULT_MAX_DOCS_FOR_CLUSTERING = 5000
-
-# Default sampling parameters
-DEFAULT_MAX_SAMPLES_PER_CLUSTER_FOR_SUMMARY = 10
-DEFAULT_MAX_SAMPLES_UNCLUSTERED_FOR_SUMMARY = 20
-
-
-def get_error_analysis_working_index(group_name: str) -> str:
-    """
-    Generates the name for the temporary working index used during error analysis for a group.
-    """
-    clean_group = (
-        group_name.replace(" ", "_").replace("/", "_").replace(".", "_").lower()
-    )
-    return f"temp_error_analysis_{clean_group}"
+# Default parameters for ErrorSummarizerAgent
+DEFAULT_ERROR_LEVELS = ["error", "critical", "fatal", "warn"]
+DEFAULT_MAX_LOGS_FOR_SUMMARY = 5000
+# UPDATED DEFAULT EMBEDDING MODEL
+DEFAULT_EMBEDDING_MODEL_FOR_SUMMARY = "sentence-transformers/all-MiniLM-L6-v2"
+DEFAULT_LLM_MODEL_FOR_SUMMARY_GENERATION = GEMINI_LLM_MODEL
+DEFAULT_DBSCAN_EPS_FOR_SUMMARY = 0.3
+DEFAULT_DBSCAN_MIN_SAMPLES_FOR_SUMMARY = 2
+DEFAULT_MAX_SAMPLES_PER_CLUSTER_FOR_SUMMARY = 5
+DEFAULT_MAX_SAMPLES_UNCLUSTERED_FOR_SUMMARY = 10

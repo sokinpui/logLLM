@@ -37,7 +37,6 @@ pip-wheel-metadata/
 *.whl
 
 # Common data/model directories
-models/
 
 # IDE and editor files
 .idea/
