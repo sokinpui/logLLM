@@ -48,3 +48,4 @@ models/
 *.zip
 
 # Add any other custom ignores here
+frontend/.vite
