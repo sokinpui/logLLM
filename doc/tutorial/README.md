@@ -1,0 +1,12 @@
+## LLM Integration Patterns
+
+This guide explains the core concepts of Large Language Model (LLM) integration using the `logLLM` project as a case study.
+
+- **Prompt Management**: Effective LLM integration requires treating prompts as a managed asset, not as hard-coded strings. A prompt management system separates the instructional text from the application code, often storing prompts in version-controlled files (e.g., JSON). This allows for easier updates, tracking, and collaboration on prompt engineering.
+- **Embeddings for Semantic Understanding**: To understand the _meaning_ of text, systems use embedding models. These models convert text (like a log message) into a numerical vector. Text with similar meanings will have vectors that are close together in mathematical space. This enables powerful features like semantic search and clustering, which group items by meaning rather than just keywords.
+- **Structured Output**: To ensure reliability, it's crucial to compel an LLM to return data in a predictable, machine-readable format like JSON. This is achieved by providing the LLM with a schema (e.g., a Pydantic model or JSON Schema) that defines the desired output structure, fields, and data types. This eliminates fragile string parsing and makes the LLM's output directly usable.
+- **LLM for Data Summarization**: Beyond simple text generation, LLMs excel at synthesis. By providing a curated set of data (like a cluster of similar error logs), an LLM can be prompted to generate a high-level, structured summary that identifies the root cause, impact, and relevant keywords, turning raw data into actionable insight.
+- **Workflow Orchestration (LangGraph)**: Complex, multi-step LLM workflows require a robust framework for managing state and control flow. Libraries like LangGraph allow developers to define these workflows as a graph of nodes (processing steps) and conditional edges (decision points). This creates a clear, debuggable, and stateful process for long-running tasks.
+- **Tool Use and the Modern Context Protocol (MCP)**: This advanced pattern involves providing the LLM with a set of "tools" (pre-defined functions) it can ask the application to execute. The MCP is a standardized specification for defining these tools and for packaging the data (context) exchanged between the LLM and the system, enabling more dynamic and autonomous agent behavior.
+
+for more information, see the [LLM Integration Patterns](./llm_integration_patterns.md) document.
