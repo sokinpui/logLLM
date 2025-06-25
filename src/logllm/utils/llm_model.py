@@ -1,4 +1,4 @@
-# llm_model_direct_api.py
+# src/logllm/utils/llm_model.py
 
 import json
 import os
@@ -19,7 +19,20 @@ from google.generativeai import types as genai_types
 from pydantic import BaseModel, Field
 
 from ..config import config as cfg
+
+# --- MCP IMPORTS ---
+from ..mcp.schemas import ContextItem  # For typing if needed
+from ..mcp.schemas import ContextItemType  # For typing if needed
+from ..mcp.schemas import (
+    ContextPayload,
+    MCPToolCall,
+    MCPToolDefinition,
+    MCPToolParameterSchema,
+    MCPToolResult,
+)
 from .logger import Logger
+
+# from ..mcp.tool_registry import ToolRegistry # If LLMModel needs to invoke tools directly
 
 try:
     from vertexai.preview import tokenization
@@ -41,10 +54,14 @@ TYPE_MAP = {
     "boolean": GoogleApiType.BOOLEAN,
     "array": GoogleApiType.ARRAY,
     "object": GoogleApiType.OBJECT,
+    # MCP specific types if they don't map directly
+    # "any": GoogleApiType.TYPE_UNSPECIFIED, # Example
 }
 
 
 def pydantic_to_google_tool(pydantic_model: Type[BaseModel]) -> Tool:
+    # This function remains as it's useful for directly converting a Pydantic model
+    # to a Gemini tool for cases where an MCPToolDefinition isn't explicitly built.
     schema_dict = pydantic_model.model_json_schema()
     properties = schema_dict.get("properties", {})
     required_fields = schema_dict.get("required", [])
@@ -83,7 +100,7 @@ def pydantic_to_google_tool(pydantic_model: Type[BaseModel]) -> Tool:
                 type=google_type, description=prop_description, items=items_schema
             )
         else:
-            pass
+            pass  # self._logger.warning(f"Unsupported type '{prop_type_str}' for property '{name}' in Pydantic to Google Tool conversion.")
     function_declaration = FunctionDeclaration(
         name=pydantic_model.__name__,
         description=model_description,
@@ -121,11 +138,11 @@ MODEL_RPM_LIMITS = {
 EMBEDDING_MODEL_TOKEN_LIMITS = {
     "models/text-embedding-004": 2048,
     "text-embedding-004": 2048,
-    "models/embedding-001": 2048,  # Common limit, adjust if known otherwise
+    "models/embedding-001": 2048,
     "embedding-001": 2048,
-    "models/gemini-embedding-exp-03-07": 2048,  # Assuming default, adjust if specific limit known
+    "models/gemini-embedding-exp-03-07": 2048,
     "gemini-embedding-exp-03-07": 2048,
-    "default": 2048,  # Default embedding token limit
+    "default": 2048,
 }
 
 
@@ -133,7 +150,8 @@ class LLMModel:
     def __init__(self):
         self._logger = Logger()
         self.model = None
-        self.context_size = 0
+        self.context_size = 0  # This should be set by concrete implementations
+        self.model_name: str = "undefined_llm_model"  # Added for clarity
         self._last_api_call_time: Optional[float] = None
         self.rpm_limit: int = 15
         self.min_request_interval: float = 60.0 / self.rpm_limit
@@ -157,19 +175,32 @@ class LLMModel:
     def _update_last_call_time(self):
         self._last_api_call_time = time.monotonic()
 
-    def generate(self, prompt: str, schema: Optional[Type[BaseModel]] = None):
+    def generate(
+        self,
+        prompt: Union[str, ContextPayload],  # Prompt can now be a ContextPayload
+        output_schema: Optional[
+            Type[BaseModel]
+        ] = None,  # For structured output (Pydantic model)
+        tools: Optional[List[MCPToolDefinition]] = None,  # MCP Tool definitions
+        # tool_registry: Optional[ToolRegistry] = None, # If direct invocation from LLMModel
+        # context: Optional[ContextPayload] = None, # Alternative way to pass context if prompt is just string
+    ) -> Union[
+        str, BaseModel, MCPToolCall, None
+    ]:  # Can return string, Pydantic instance, or MCPToolCall
         raise NotImplementedError
 
-    def token_count(self, prompt: str | None) -> int:
+    def token_count(self, text_content: str | None) -> int:
         raise NotImplementedError
 
     def generate_embeddings(
         self,
         contents: Union[str, List[str]],
         embedding_model_name: Optional[str] = None,
-        task_type: Optional[str] = None,
-        title: Optional[str] = None,
-        output_dimensionality: Optional[int] = None,
+        task_type: Optional[
+            str
+        ] = None,  # e.g., "RETRIEVAL_DOCUMENT", "SEMANTIC_SIMILARITY"
+        title: Optional[str] = None,  # For RETRIEVAL_DOCUMENT task_type
+        output_dimensionality: Optional[int] = None,  # To reduce embedding dimensions
     ) -> List[List[float]]:
         raise NotImplementedError
 
@@ -180,8 +211,9 @@ class GeminiModel(LLMModel):
         if model_name:
             self.model_name = model_name
         else:
-            self.model_name = cfg.GEMINI_LLM_MODEL
+            self.model_name = cfg.GEMINI_LLM_MODEL  # Default generation model
 
+        # RPM for generation model
         self.api_model_name_key = self.model_name.split("/")[-1]
         self.rpm_limit = MODEL_RPM_LIMITS.get(
             self.api_model_name_key, MODEL_RPM_LIMITS["default"]
@@ -189,19 +221,19 @@ class GeminiModel(LLMModel):
 
         if self.rpm_limit <= 0:
             self._logger.warning(
-                f"RPM limit for generation model {self.model_name} is zero or invalid."
+                f"RPM limit for generation model {self.model_name} is zero or invalid. Rate limiting might be ineffective."
             )
-            self.min_request_interval = 0
+            self.min_request_interval = 0  # Effectively disables waiting
         else:
             self.min_request_interval = 60.0 / self.rpm_limit
 
         self.default_embedding_model: str = getattr(
             cfg,
-            "GEMINI_EMBEDDING_MODEL",
-            "models/text-embedding-004",  # Updated default
+            "GEMINI_EMBEDDING_MODEL",  # Ensure this is in your config
+            "models/text-embedding-004",
         )
         self._logger.info(
-            f"Initialized Direct API GeminiModel: {self.model_name} (RPM: {self.rpm_limit}). "
+            f"Initialized Direct API GeminiModel: {self.model_name} (Generation RPM: {self.rpm_limit}). "
             f"Default embedding model: {self.default_embedding_model}."
         )
 
@@ -212,16 +244,28 @@ class GeminiModel(LLMModel):
 
         try:
             genai.configure(api_key=api_key)
-            os.environ["GOOGLE_API_KEY"] = api_key
-            self.generation_config = genai.GenerationConfig(temperature=1.0)
-            self.safety_settings = {}
+            os.environ["GOOGLE_API_KEY"] = api_key  # Some libraries might expect this
+            # Default generation config, can be overridden per call
+            self.generation_config = genai.GenerationConfig(
+                temperature=0.7
+            )  # Slightly less random
+            self.safety_settings = {}  # Adjust if needed
             self.model = genai.GenerativeModel(
                 model_name=self.model_name,
                 generation_config=self.generation_config,
                 safety_settings=self.safety_settings,
             )
+            # Estimate context size (example, actual might vary per specific Gemini model)
+            # This is a rough guide; Gemini models often have large context windows (e.g., 128k, 1M tokens)
+            if "flash" in self.model_name:
+                self.context_size = 128000
+            elif "pro" in self.model_name:
+                self.context_size = 1000000  # Gemini 1.5 Pro
+            else:
+                self.context_size = 32000  # Older models or fallback
+
             self._logger.info(
-                f"Generative model {self.model_name} initialized successfully."
+                f"Generative model {self.model_name} initialized successfully. Estimated context size: {self.context_size} tokens."
             )
             if not VERTEX_TOKENIZER_AVAILABLE:
                 self._logger.warning(
@@ -233,31 +277,262 @@ class GeminiModel(LLMModel):
             )
             raise
 
-    def token_count(self, prompt: str | None) -> int:
-        if prompt is None:
+    def token_count(self, text_content: str | None) -> int:
+        if text_content is None:
             return 0
         if VERTEX_TOKENIZER_AVAILABLE:
             try:
-                # User's code had this hardcoded, using it as a general proxy for chunking estimations.
-                tokenizer_model_key = "gemini-1.5-flash-001"
+                # Use a common, representative tokenizer model for estimation
+                # This might not perfectly match the exact model being used for generation/embedding
+                # but serves as a good local estimator.
+                tokenizer_model_key = (
+                    "gemini-1.5-flash-001"  # Or another suitable model
+                )
                 tokenizer = tokenization.get_tokenizer_for_model(tokenizer_model_key)
-                count_response = tokenizer.count_tokens(prompt)
+                count_response = tokenizer.count_tokens(text_content)
                 return count_response.total_tokens
             except Exception as e_vertex:
                 self._logger.warning(
-                    f"Local token count with vertexai for '{tokenizer_model_key}' failed: {e_vertex}. Falling back."
+                    f"Local token count with vertexai for '{tokenizer_model_key}' failed: {e_vertex}. Falling back to API count."
                 )
+        # Fallback to API-based token counting
         try:
-            # Fallback to generative model's count_tokens
-            count = self.model.count_tokens(prompt).total_tokens
+            # Note: self.model is the *generation* model. For embeddings, a different model might be used.
+            # If counting for an embedding model, ideally we'd use that specific model's counter.
+            # This is a general purpose counter, often sufficient for estimations.
+            count = self.model.count_tokens(text_content).total_tokens
             return count
         except Exception as e_genai:
             self._logger.warning(
-                f"API token count with genai for {self.model_name} failed: {e_genai}. Basic estimate."
+                f"API token count with genai for {self.model_name} failed: {e_genai}. Falling back to basic word count."
             )
-            return len(prompt.split())  # Basic fallback
+            # Very basic fallback
+            return len(text_content.split())
+
+    def _mcp_tool_definitions_to_gemini_tools(
+        self, mcp_tools: List[MCPToolDefinition]
+    ) -> List[Tool]:
+        """Converts a list of MCPToolDefinition objects to Gemini API Tool objects."""
+        gemini_tools: List[Tool] = []
+        for mcp_tool_def in mcp_tools:
+            google_properties: Dict[str, Schema] = {}
+            required_params: List[str] = []
+
+            if mcp_tool_def.parameters:
+                for name, param_schema in mcp_tool_def.parameters.items():
+                    google_type = TYPE_MAP.get(
+                        param_schema.type, GoogleApiType.TYPE_UNSPECIFIED
+                    )
+                    items_schema_for_google = None
+                    if param_schema.type == "array" and param_schema.items:
+                        item_type_str = param_schema.items.get(
+                            "type", "string"
+                        )  # Default to string if not specified
+                        item_google_type = TYPE_MAP.get(
+                            item_type_str, GoogleApiType.STRING
+                        )
+                        items_schema_for_google = Schema(
+                            type=item_google_type,
+                            description=param_schema.items.get("description"),
+                        )
+
+                    google_properties[name] = Schema(
+                        type=google_type,
+                        description=param_schema.description,
+                        enum=param_schema.enum,
+                        items=items_schema_for_google,
+                        # Note: 'properties' for object type params not fully implemented here for simplicity
+                    )
+                    if param_schema.required:
+                        required_params.append(name)
+
+            func_decl = FunctionDeclaration(
+                name=mcp_tool_def.name,
+                description=mcp_tool_def.description,
+                parameters=Schema(
+                    type=GoogleApiType.OBJECT,
+                    properties=google_properties,
+                    required=(
+                        required_params if required_params else None
+                    ),  # Must be None if empty
+                ),
+            )
+            gemini_tools.append(Tool(function_declarations=[func_decl]))
+        return gemini_tools
+
+    def generate(
+        self,
+        prompt_content: Union[str, ContextPayload],
+        output_schema: Optional[Type[BaseModel]] = None,
+        tools: Optional[List[MCPToolDefinition]] = None,
+        # tool_registry: Optional[ToolRegistry] = None, # Not used for now, caller handles invocation
+    ) -> Union[str, BaseModel, MCPToolCall, None]:
+        self._wait_for_rate_limit(model_rpm=self.rpm_limit)
+
+        # Prepare prompt string
+        if isinstance(prompt_content, ContextPayload):
+            # A basic formatter. This would be a place for more sophisticated context assembly.
+            from ..mcp.mcp_manager import (
+                ContextManager,  # Local import to avoid circular dependency at module level
+            )
+
+            context_manager = ContextManager(logger=self._logger)
+            prompt_str = context_manager.format_payload_for_llm_prompt(prompt_content)
+            # You might also want to pass structured context parts directly if the model supports it
+            # e.g., via `contents`=[text_part, context_data_part_if_model_supports_it]
+        else:
+            prompt_str = prompt_content
+
+        gemini_tools_list: Optional[List[Tool]] = None
+        tool_config_dict: Optional[Dict[str, Any]] = None
+
+        if output_schema:
+            # If a Pydantic output_schema is given, convert it to a Gemini tool for structured output.
+            # This takes precedence if both output_schema and MCP tools are provided for the same call.
+            # A more robust system might disallow both or merge them.
+            try:
+                gemini_tools_list = [pydantic_to_google_tool(output_schema)]
+                tool_config_dict = {
+                    "function_calling_config": {"mode": "ANY"}
+                }  # Or "REQUIRED" if you only want the schema
+                self._logger.debug(
+                    f"LLM call configured for structured output via Pydantic schema: {output_schema.__name__}"
+                )
+            except Exception as e:
+                self._logger.error(
+                    f"Error converting Pydantic schema '{output_schema.__name__}' to Gemini tool: {e}",
+                    exc_info=True,
+                )
+                self._logger.warning(
+                    "Proceeding with standard text generation due to schema conversion error."
+                )
+                output_schema = None  # Disable structured output attempt
+        elif tools:
+            # If MCPToolDefinitions are provided, convert them to Gemini tools.
+            try:
+                gemini_tools_list = self._mcp_tool_definitions_to_gemini_tools(tools)
+                tool_config_dict = {
+                    "function_calling_config": {"mode": "ANY"}
+                }  # Allow LLM to choose
+                self._logger.debug(
+                    f"LLM call configured with {len(gemini_tools_list)} MCP tools."
+                )
+            except Exception as e:
+                self._logger.error(
+                    f"Error converting MCPToolDefinitions to Gemini tools: {e}",
+                    exc_info=True,
+                )
+                self._logger.warning(
+                    "Proceeding with standard text generation due to tool conversion error."
+                )
+                tools = None  # Disable tool use attempt
+
+        try:
+            self._logger.debug(
+                f"Generating content with model '{self.model_name}'. Prompt (first 200 chars): '{prompt_str[:200]}...'"
+            )
+            response = self.model.generate_content(
+                prompt_str,
+                tools=gemini_tools_list,
+                tool_config=tool_config_dict,  # type: ignore
+            )
+            self._update_last_call_time()
+
+            # --- Process response for function/tool calls or structured output ---
+            if response.candidates and response.candidates[0].content.parts:
+                function_call_part = next(
+                    (
+                        p
+                        for p in response.candidates[0].content.parts
+                        if hasattr(p, "function_call") and p.function_call
+                    ),
+                    None,
+                )
+
+                if function_call_part:
+                    gemini_fc = function_call_part.function_call
+                    self._logger.info(
+                        f"Model returned function call: Name='{gemini_fc.name}', Args='{dict(gemini_fc.args)}'"
+                    )
+
+                    if output_schema and gemini_fc.name == output_schema.__name__:
+                        # This was a structured output request fulfilled by the Pydantic schema tool
+                        try:
+                            validated_output = output_schema.model_validate(
+                                dict(gemini_fc.args)
+                            )
+                            self._logger.debug(
+                                f"Successfully validated structured output against schema: {output_schema.__name__}"
+                            )
+                            return validated_output
+                        except Exception as val_err:
+                            self._logger.error(
+                                f"Pydantic validation failed for schema '{output_schema.__name__}': {val_err}",
+                                exc_info=True,
+                            )
+                            # Fallback: return raw text if available, or None
+                            try:
+                                return response.text
+                            except:
+                                return None
+                    elif tools:
+                        # This was a call to one of the provided MCP tools
+                        mcp_tool_call = MCPToolCall(
+                            tool_name=gemini_fc.name,
+                            arguments=dict(
+                                gemini_fc.args
+                            ),  # Ensure args are plain dict
+                        )
+                        self._logger.debug(
+                            f"Mapping Gemini function call to MCPToolCall: {mcp_tool_call.model_dump_json(indent=2)}"
+                        )
+                        return mcp_tool_call
+                    else:
+                        # Unexpected function call
+                        self._logger.warning(
+                            f"Model returned an unexpected function call '{gemini_fc.name}' when no schema or matching tools were primary."
+                        )
+                        # Fallback to text if possible
+                        try:
+                            return response.text
+                        except:
+                            return None
+            # --- End of function/tool call processing ---
+
+            # Standard text response
+            try:
+                text_content = response.text
+                if not text_content:  # Check if empty even if no explicit error
+                    # This can happen if content is blocked, or if it only made a function call that wasn't processed above
+                    self._logger.warning(
+                        "LLM response.text is empty. This might indicate blocked content or an unhandled function call."
+                    )
+                    # If there was a function call part, we likely should have returned an MCPToolCall or validated output.
+                    # If we reach here and text is empty, it's ambiguous.
+                    return None
+                return text_content
+            except ValueError:  # Often indicates blocked content
+                self._logger.warning(
+                    "Accessing response.text failed (ValueError), likely due to blocked content or unsupported response type."
+                )
+                # Consider logging response.prompt_feedback if available
+                if response.prompt_feedback:
+                    self._logger.warning(f"Prompt Feedback: {response.prompt_feedback}")
+                return None
+            except Exception as text_err:
+                self._logger.error(
+                    f"Error extracting text content from LLM response: {text_err}",
+                    exc_info=True,
+                )
+                return None
+
+        except Exception as e:
+            self._logger.error(f"Gemini API call error: {e}", exc_info=True)
+            # Consider more specific error handling for API errors (rate limits, auth, etc.)
+            raise  # Or return None / specific error object
 
     def _average_embeddings(self, embeddings: List[List[float]]) -> List[float]:
+        # (Implementation remains the same)
         if not embeddings:
             return []
         if len(embeddings) == 1:
@@ -283,30 +558,22 @@ class GeminiModel(LLMModel):
     def _split_text_into_chunks(
         self, text: str, chunk_token_limit: int, chunk_word_overlap: int = 50
     ) -> List[str]:
-        """
-        Splits text into chunks, each not exceeding chunk_token_limit.
-        Uses self.token_count for estimation. Overlap is in words.
-        """
+        # (Implementation remains the same)
         self._logger.debug(
             f"Attempting to chunk text. Target token limit: {chunk_token_limit}, Word overlap: {chunk_word_overlap}"
         )
-        words = text.split()  # Simple whitespace split
+        words = text.split()
         if not words:
             return []
 
-        # If the whole text is already within limit (considering a small buffer for join characters)
-        # Buffer helps avoid re-tokenizing if original text is just under the limit.
-        if self.token_count(text) < chunk_token_limit - 5:  # 5 is a small buffer
+        if self.token_count(text) < chunk_token_limit - 5:
             return [text]
 
         all_chunks: List[str] = []
         current_chunk_words: List[str] = []
-
         idx = 0
         while idx < len(words):
             word_to_add = words[idx]
-
-            # Try adding the word
             potential_new_chunk_words = current_chunk_words + [word_to_add]
             potential_new_chunk_str = " ".join(potential_new_chunk_words)
             estimated_tokens = self.token_count(potential_new_chunk_str)
@@ -315,46 +582,30 @@ class GeminiModel(LLMModel):
                 current_chunk_words.append(word_to_add)
                 idx += 1
             else:
-                # Word makes it too long. Finalize the current_chunk_words (if any).
                 if current_chunk_words:
                     all_chunks.append(" ".join(current_chunk_words))
-
-                    # Determine overlap for the next chunk from the just finalized one.
                     overlap_start_idx = max(
                         0, len(current_chunk_words) - chunk_word_overlap
                     )
                     new_current_chunk_words = current_chunk_words[overlap_start_idx:]
-
-                    # If the word_to_add itself made current_chunk_words (which was empty) too long
                     if not all_chunks or " ".join(new_current_chunk_words) != " ".join(
                         current_chunk_words
-                    ):  # check if it made progress
+                    ):
                         current_chunk_words = new_current_chunk_words
-                    else:  # single word is too long or overlap is not helping
-                        current_chunk_words = (
-                            []
-                        )  # Reset, word_to_add will start a new chunk or be a chunk itself
-
-                    # If current_chunk_words after overlap processing ALREADY contains word_to_add (because of how idx is handled or if overlap is large)
-                    # we need to ensure word_to_add isn't processed twice or skipped.
-                    # The current word (words[idx]) has not been added to a *finalized* chunk yet.
-                    # It will be the first candidate for the *new* current_chunk_words.
-
-                elif not current_chunk_words:  # First word itself is too long
+                    else:
+                        current_chunk_words = []
+                elif not current_chunk_words:
                     self._logger.warning(
                         f"Word '{word_to_add[:50]}...' (tokens: {estimated_tokens}) "
                         f"alone exceeds limit {chunk_token_limit}. Adding as its own chunk."
                     )
-                    all_chunks.append(word_to_add)  # Add it as a chunk
-                    current_chunk_words = []  # Reset for next
-                    idx += 1  # Move to next word
-
-            # If at the end, add remaining current_chunk_words
+                    all_chunks.append(word_to_add)
+                    current_chunk_words = []
+                    idx += 1
             if idx == len(words):
                 if current_chunk_words:
                     all_chunks.append(" ".join(current_chunk_words))
                 break
-
         return all_chunks if all_chunks else ([text] if text else [])
 
     def generate_embeddings(
@@ -365,219 +616,143 @@ class GeminiModel(LLMModel):
         title: Optional[str] = None,
         output_dimensionality: Optional[int] = None,
     ) -> List[List[float]]:
+        # (Implementation largely remains the same, ensuring robust chunking and API calls)
         model_to_use = embedding_model_name or self.default_embedding_model
-        embedding_model_key = model_to_use.split("/")[-1]
+        embedding_model_key = model_to_use.split("/")[-1]  # e.g., "text-embedding-004"
         embedding_rpm = MODEL_RPM_LIMITS.get(
             embedding_model_key, MODEL_RPM_LIMITS["default"]
         )
-        token_limit = EMBEDDING_MODEL_TOKEN_LIMITS.get(
+        token_limit_for_embedding_model = EMBEDDING_MODEL_TOKEN_LIMITS.get(
             embedding_model_key, EMBEDDING_MODEL_TOKEN_LIMITS["default"]
         )
 
         self._wait_for_rate_limit(model_rpm=embedding_rpm)
 
-        original_input_list: List[str] = [contents] if isinstance(contents, str) else contents  # type: ignore
+        input_texts: List[str] = [contents] if isinstance(contents, str) else contents  # type: ignore
 
-        all_texts_for_api: List[str] = []
-        # Stores how many API embeddings correspond to each original input text that was non-empty
+        # Track which original texts were valid (non-empty) to reconstruct output correctly
+        original_text_is_valid: List[bool] = [
+            bool(text and text.strip()) for text in input_texts
+        ]
+
+        # Prepare texts for API: chunk if necessary
+        api_texts: List[str] = []
+        # For each valid original text, how many chunks (API embeddings) will it produce?
         num_api_embeddings_per_valid_original_text: List[int] = []
-        original_text_was_valid: List[bool] = (
-            []
-        )  # Tracks if original text was non-empty
 
-        for text_item in original_input_list:
-            if (
-                not text_item.strip()
-            ):  # Consider empty or whitespace-only as invalid for embedding
-                original_text_was_valid.append(False)
-                continue  # Will result in an empty list [] for this item in the final output
+        for i, text_item in enumerate(input_texts):
+            if not original_text_is_valid[i]:
+                continue  # Skip empty/whitespace strings for API call
 
-            original_text_was_valid.append(True)
-            estimated_tokens = self.token_count(text_item)
+            # Use the specific embedding model's token limit for chunking
+            estimated_tokens = self.token_count(
+                text_item
+            )  # Ideally, use a tokenizer specific to the embedding model
+            # but self.token_count is a general estimator.
 
-            if estimated_tokens > token_limit:
+            if estimated_tokens > token_limit_for_embedding_model:
                 self._logger.info(
-                    f"Text item (approx {estimated_tokens} tokens) for model '{model_to_use}' "
-                    f"exceeds limit ({token_limit}). Chunking..."
+                    f"Text item for embedding model '{model_to_use}' (approx {estimated_tokens} tokens) "
+                    f"exceeds its limit ({token_limit_for_embedding_model}). Chunking..."
                 )
-                # A simple overlap could be 10% of chunk_token_limit, converted to words.
-                # For word_overlap_count in _split_text_into_chunks, using a fixed word count for simplicity.
-                # e.g., 50 words overlap. Adjust as needed.
                 chunks = self._split_text_into_chunks(
-                    text_item, token_limit, chunk_word_overlap=30
+                    text_item,
+                    token_limit_for_embedding_model,
+                    chunk_word_overlap=30,  # Example overlap
                 )
-
                 if chunks:
-                    all_texts_for_api.extend(chunks)
+                    api_texts.extend(chunks)
                     num_api_embeddings_per_valid_original_text.append(len(chunks))
-                else:  # Chunking failed to produce anything
+                else:  # Chunking produced nothing, send original (might fail)
                     self._logger.warning(
-                        f"Chunking returned no result for text: '{text_item[:100]}...'. Sending original (may fail)."
+                        f"Chunking failed for text: '{text_item[:100]}...'. Sending original."
                     )
-                    all_texts_for_api.append(text_item)
+                    api_texts.append(text_item)
                     num_api_embeddings_per_valid_original_text.append(1)
             else:
-                all_texts_for_api.append(text_item)
+                api_texts.append(text_item)
                 num_api_embeddings_per_valid_original_text.append(1)
 
-        if not all_texts_for_api:
-            self._logger.info(
-                "No non-empty texts to embed after processing and chunking."
-            )
-            return [[] for _ in original_input_list]  # Return list of empty lists
+        if not api_texts:  # All input texts were empty or chunking resulted in nothing
+            self._logger.info("No valid texts to embed after processing.")
+            return [
+                [] for _ in input_texts
+            ]  # Return list of empty lists matching original input count
 
         try:
             self._logger.info(
-                f"Requesting {len(all_texts_for_api)} embeddings from API for model {model_to_use}."
+                f"Requesting {len(api_texts)} embeddings from API for model '{model_to_use}'. Task type: {task_type or 'N/A'}."
             )
             response: genai_types.EmbedContentResponse = genai.embed_content(
                 model=model_to_use,
-                content=all_texts_for_api,
-                task_type=task_type,  # type: ignore
+                content=api_texts,
+                task_type=task_type,  # type: ignore  Passes through, e.g. "RETRIEVAL_DOCUMENT"
                 title=title,
                 output_dimensionality=output_dimensionality,
             )
             self._update_last_call_time()
-            api_response_embeddings = response["embedding"]  # This is List[List[float]]
+            api_response_embeddings: List[List[float]] = response["embedding"]
 
-            if len(api_response_embeddings) != len(all_texts_for_api):
+            if len(api_response_embeddings) != len(api_texts):
                 self._logger.error(
-                    f"API returned {len(api_response_embeddings)} embeddings, "
-                    f"but {len(all_texts_for_api)} were expected. Result mapping may be incorrect."
+                    f"API returned {len(api_response_embeddings)} embeddings, but {len(api_texts)} were expected for model '{model_to_use}'. "
+                    "Result mapping might be incorrect."
                 )
-                # Attempt to pad or truncate, or raise error. For now, proceed with caution.
-                # This case indicates a significant issue with API response or assumptions.
-                # Fallback: try to construct what we can, or return error state.
-                # For simplicity, if this happens, subsequent averaging may fail or be misaligned.
+                # Fallback: attempt to match what's available or return error state
+                # For now, we'll try to process what we got, but this is risky.
+                # A robust solution might pad with empty embeddings or raise an error.
 
-            final_results: List[List[float]] = []
-            current_api_emb_idx = 0
-            valid_text_idx = (
-                0  # To iterate through num_api_embeddings_per_valid_original_text
+            # Reconstruct final results: average chunk embeddings, insert [] for invalid originals
+            final_embeddings_list: List[List[float]] = []
+            api_emb_idx = 0
+            valid_original_text_chunk_counts_iter = iter(
+                num_api_embeddings_per_valid_original_text
             )
 
-            for was_valid in original_text_was_valid:
-                if not was_valid:
-                    final_results.append([])  # For original empty/whitespace strings
-                else:
-                    if valid_text_idx >= len(
-                        num_api_embeddings_per_valid_original_text
-                    ):
-                        self._logger.error(
-                            "Logic error: Ran out of chunk counts for valid texts."
-                        )
-                        final_results.append([])  # Error case
-                        continue
+            for is_valid in original_text_is_valid:
+                if not is_valid:
+                    final_embeddings_list.append([])
+                    continue
 
-                    num_chunks_for_this_item = (
-                        num_api_embeddings_per_valid_original_text[valid_text_idx]
+                try:
+                    num_chunks_for_this = next(valid_original_text_chunk_counts_iter)
+                except StopIteration:
+                    self._logger.error(
+                        "Logic error: Mismatch in tracking valid texts and their chunk counts."
+                    )
+                    final_embeddings_list.append([])  # Error placeholder
+                    continue
+
+                if api_emb_idx + num_chunks_for_this > len(api_response_embeddings):
+                    self._logger.error(
+                        f"Not enough embeddings from API for current item. Expected {num_chunks_for_this}, available {len(api_response_embeddings) - api_emb_idx}."
+                    )
+                    final_embeddings_list.append([])  # Error placeholder
+                    api_emb_idx = len(
+                        api_response_embeddings
+                    )  # Consume remaining to avoid further errors on this item
+                    continue
+
+                if num_chunks_for_this == 0:  # Should not happen if is_valid
+                    final_embeddings_list.append([])
+                elif num_chunks_for_this == 1:
+                    final_embeddings_list.append(api_response_embeddings[api_emb_idx])
+                else:  # Averaging needed
+                    chunked_embeddings = api_response_embeddings[
+                        api_emb_idx : api_emb_idx + num_chunks_for_this
+                    ]
+                    final_embeddings_list.append(
+                        self._average_embeddings(chunked_embeddings)
                     )
 
-                    if current_api_emb_idx + num_chunks_for_this_item > len(
-                        api_response_embeddings
-                    ):
-                        self._logger.error(
-                            f"Not enough embeddings from API to process item. Needed {num_chunks_for_this_item}, "
-                            f"have {len(api_response_embeddings) - current_api_emb_idx} left. Original text index related to {valid_text_idx}."
-                        )
-                        final_results.append([])  # Error case for this item
-                        # Attempt to advance current_api_emb_idx to prevent infinite loop on next items, though data is lost.
-                        current_api_emb_idx = min(
-                            current_api_emb_idx + num_chunks_for_this_item,
-                            len(api_response_embeddings),
-                        )
-                        valid_text_idx += 1
-                        continue
+                api_emb_idx += num_chunks_for_this
 
-                    if (
-                        num_chunks_for_this_item == 0
-                    ):  # Should not happen if was_valid is true and it wasn't chunked into nothing
-                        final_results.append([])
-                    elif num_chunks_for_this_item == 1:
-                        final_results.append(
-                            api_response_embeddings[current_api_emb_idx]
-                        )
-                    else:  # Averaging needed
-                        embeddings_to_average = api_response_embeddings[
-                            current_api_emb_idx : current_api_emb_idx
-                            + num_chunks_for_this_item
-                        ]
-                        averaged_embedding = self._average_embeddings(
-                            embeddings_to_average
-                        )
-                        final_results.append(averaged_embedding)
-
-                    current_api_emb_idx += num_chunks_for_this_item
-                    valid_text_idx += 1
-
-            return final_results
+            return final_embeddings_list
 
         except Exception as e:
             self._logger.error(
-                f"Error generating embeddings with model {model_to_use}: {e}",
+                f"Error generating embeddings with model '{model_to_use}': {e}",
                 exc_info=True,
             )
-            raise
-
-    def generate(self, prompt: str, schema: Optional[Type[BaseModel]] = None):
-        self._wait_for_rate_limit(model_rpm=self.rpm_limit)
-        tools = None
-        tool_config = None
-        if schema:
-            try:
-                tools = [pydantic_to_google_tool(schema)]
-                tool_config = {"function_calling_config": {"mode": "ANY"}}
-                self._logger.debug(f"Attempting structured output: {schema.__name__}")
-            except Exception as e:
-                self._logger.error(
-                    f"Pydantic schema conversion error: {e}", exc_info=True
-                )
-                self._logger.warning("Proceeding with standard text generation.")
-        try:
-            response = self.model.generate_content(
-                prompt, tools=tools, tool_config=tool_config
-            )
-            self._update_last_call_time()
-            if schema and response.candidates and response.candidates[0].content.parts:
-                fc_part = next(
-                    (
-                        p
-                        for p in response.candidates[0].content.parts
-                        if hasattr(p, "function_call") and p.function_call
-                    ),
-                    None,
-                )
-                if fc_part:
-                    fc = fc_part.function_call
-                    self._logger.debug(f"Model returned function call: {fc.name}")
-                    if fc.name != schema.__name__:
-                        self._logger.warning(
-                            f"Expected '{schema.__name__}', got '{fc.name}'."
-                        )
-                    try:
-                        args_dict = dict(fc.args)
-                        return schema.model_validate(args_dict)
-                    except Exception as val_err:
-                        self._logger.error(
-                            f"Pydantic validation failed: {val_err}", exc_info=True
-                        )
-                        return None
-                else:
-                    self._logger.warning(
-                        f"Schema provided but no function call in response."
-                    )
-            try:
-                text_content = response.text
-                if not text_content and (not schema or not fc_part):  # type: ignore
-                    self._logger.warning("Response empty/blocked.")
-                    return None
-                return text_content
-            except ValueError:
-                self._logger.warning("Response blocked (ValueError accessing .text).")
-                return None
-            except Exception as text_err:
-                self._logger.error(f"Error extracting text: {text_err}", exc_info=True)
-                return None
-        except Exception as e:
-            self._logger.error(f"Gemini API call error: {e}", exc_info=True)
-            raise
+            # Return empty embeddings for all original inputs on failure
+            return [[] for _ in input_texts]
