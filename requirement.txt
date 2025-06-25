@@ -13,6 +13,8 @@ langchain-ollama
 langchain-text-splitters
 langgraph
 
+httpx[socks]
+
 
 pandas
 pydantic
@@ -37,3 +39,5 @@ sentence-transformers
 torch
 torchvision
 torchaudio
+
+ollama

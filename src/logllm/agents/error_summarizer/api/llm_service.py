@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Type
 
 from pydantic import BaseModel, ValidationError
 
-from ....utils.llm_model import LLMModel
+from ....utils.llm.gemini_model import LLMModel
 from ....utils.logger import Logger
 from ..states import LogClusterSummaryOutput
 

@@ -8,7 +8,7 @@ from langgraph.graph.graph import CompiledGraph
 
 from ...config import config as cfg
 from ...utils.database import ElasticsearchDatabase
-from ...utils.llm_model import GeminiModel, LLMModel
+from ...utils.llm.gemini_model import GeminiModel, LLMModel
 from ...utils.local_embedder import LocalSentenceTransformerEmbedder
 from ...utils.logger import Logger
 from .api import (

@@ -11,7 +11,7 @@ sys.path.insert(
 try:
     from src.logllm.config import config as cfg  # type: ignore
     from src.logllm.utils.database import ElasticsearchDatabase  # type: ignore
-    from src.logllm.utils.llm_model import GeminiModel  # type: ignore
+    from src.logllm.utils.llm.gemini_model import GeminiModel  # type: ignore
 
     from . import ErrorSummarizerAgent  # Relative import for the agent
     from .states import ErrorSummarizerAgentState  # Import state for typing

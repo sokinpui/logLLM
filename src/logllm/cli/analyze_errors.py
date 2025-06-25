@@ -10,7 +10,7 @@ try:
     from ..agents.error_summarizer.states import ErrorSummarizerAgentState
     from ..config import config as cfg
     from ..utils.database import ElasticsearchDatabase
-    from ..utils.llm_model import GeminiModel
+    from ..utils.llm.gemini_model import GeminiModel
     from ..utils.logger import Logger
 except ImportError as e:
     print(f"Error importing modules for 'analyze-errors' CLI: {e}", file=sys.stderr)

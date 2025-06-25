@@ -600,25 +600,3 @@ class ElasticsearchDatabase(Database):
                 exc_info=True,
             )
             return []
-
-
-def main():
-    from .llm_model import GeminiModel
-
-    es = ElasticsearchDatabase()
-    model = GeminiModel()
-    sample = []
-
-    res = es.random_sample("log_ssh", 500)
-
-    for r in res:
-        sample.append(r["_source"]["content"])
-
-    for r in res:
-        sample.append(r["_source"]["content"])
-
-    print(f"total tokens: {model.token_count(str(sample))}")
-
-
-if __name__ == "__main__":
-    main()

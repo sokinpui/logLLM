@@ -154,27 +154,3 @@ def test_chunk_manager(
         )
 
     print("Test complete. All hits processed.")
-
-
-def main():
-    import config as cfg
-    from llm_model import GeminiModel
-    from database import ElasticsearchDatabase
-
-    db = ElasticsearchDatabase()
-
-    model = GeminiModel()
-    chunk_manager = ESTextChunkManager(
-        id=6, field="content", index=cfg.get_pre_process_index(1), db=db
-    )
-    max_tokens = model.context_size - cfg.MEMRORY_TOKENS_LIMIT
-
-    print(f"total hits: {chunk_manager.total_hits}")
-
-    chunk = chunk_manager.get_next_chunk(max_tokens, model.token_count)
-
-    test_chunk_manager(chunk_manager, max_tokens, model.token_count, model)
-
-
-if __name__ == "__main__":
-    main()
