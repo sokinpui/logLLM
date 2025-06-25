@@ -1,7 +1,17 @@
+# logLLM Documentation
+
+Welcome to the official documentation for `logLLM`, a comprehensive system for advanced log management and analysis using Large Language Models.
+
+This documentation serves as a central resource for developers and contributors to understand the architecture, components, and workflows of the project.
+
 ## Core Concepts & Orchestration
 
 - **[Overview](./overview.md):** High-level architecture of the `logLLM` system, focusing on the CLI as the central orchestrator and how it dispatches tasks to various modules and agents.
 - **[Configuration](./configurable.md):** Detailed explanation of the `config.py` file and all its variables, covering settings for logging, Docker, databases, LLMs, and agent behaviors.
+
+## Modern Context Protocol (MCP)
+
+- **[MCP Overview](./mcp/README.md):** Introduction to the Modern Context Protocol, the standardized framework for managing and exchanging rich, structured information between system components to enable more intelligent and interconnected operations.
 
 ## Agents
 

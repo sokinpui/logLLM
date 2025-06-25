@@ -18,13 +18,18 @@ This document provides a high-level overview of the `logLLM` system architecture
 
     - Specialized components responsible for complex tasks like log parsing, error analysis, and data transformation.
     - Many newer agents (e.g., `StaticGrokParserAgent`, `ErrorSummarizerAgent`, `TimestampNormalizerAgent`) are built using `langgraph` for managing multi-step workflows.
-    - Older agents might perform tasks more directly (e.g., filesystem-based parsing in `parser_agent.py`).
-    - Interact with Utilities (LLM, DB, Prompts) to perform their functions.
+    - Interact with Utilities (LLM, DB, Prompts) and the Modern Context Protocol to perform their functions.
 
-3.  **Utilities** (`src/logllm/utils/`):
+3.  **Modern Context Protocol (MCP)** (`src/logllm/mcp/`):
+
+    - A foundational architectural layer for standardizing the exchange of rich, structured information.
+    - It provides schemas (`ContextItem`, `MCPToolDefinition`), a `ContextManager` for building context payloads, and a `ToolRegistry` for discovering and invoking tools.
+    - This enables more intelligent agent interoperability and more nuanced interactions with LLMs.
+
+4.  **Utilities** (`src/logllm/utils/`):
 
     - **`database.py` (`ElasticsearchDatabase`):** Manages all interactions with Elasticsearch (data storage, querying, indexing).
-    - **`llm_model.py` (`GeminiModel`):** Handles communication with Large Language Models (e.g., Google Gemini) for tasks like pattern generation and text summarization. Includes rate limiting and structured output capabilities.
+    - **`llm_model.py` (`GeminiModel`):** Handles communication with Large Language Models (e.g., Google Gemini). It is integrated with the MCP to understand and generate tool calls or structured output.
     - **`local_embedder.py` (`LocalSentenceTransformerEmbedder`):** Provides local text embedding generation using Sentence Transformer models.
     - **`prompts_manager.py` (`PromptsManager`):** Manages LLM prompts stored in a JSON file, including version control with Git.
     - **`collector.py` (`Collector`):** Scans directories, groups log files, and ingests raw log lines into Elasticsearch.
@@ -33,16 +38,16 @@ This document provides a high-level overview of the `logLLM` system architecture
     - **`data_struct.py`**: Defines common data structures (dataclasses) used across the system.
     - **`chunk_manager.py`**: Helps manage large text data from Elasticsearch for LLM processing.
 
-4.  **Configuration** (`src/logllm/config/config.py`):
+5.  **Configuration** (`src/logllm/config/config.py`):
 
     - Centralized configuration file for settings related to Docker, Elasticsearch, LLM models, agent parameters, and file paths.
 
-5.  **API (FastAPI)** (`src/logllm/api/`):
+6.  **API (FastAPI)** (`src/logllm/api/`):
 
     - Provides HTTP endpoints for interacting with `logLLM` functionalities, mirroring many CLI capabilities.
     - Allows for integration with a web-based frontend or other services.
 
-6.  **Frontend (React/TypeScript)** (`frontend/`):
+7.  **Frontend (React/TypeScript)** (`frontend/`):
     - A web-based user interface for interacting with the `logLLM` API.
 
 ## Core Workflow Examples
@@ -130,6 +135,7 @@ The CLI orchestrates tasks by invoking agents and utilities. Here are some prima
 ## Further Reading
 
 - **Configuration Details**: [./configurable.md](./configurable.md)
+- **Modern Context Protocol**: [./mcp/README.md](./mcp/README.md)
 - **Agent-Specific Documentation**: [./agents/README.md](./agents/README.md)
 - **Utility Class Documentation**: [./utils/README.md](./utils/README.md)
 - **CLI Command Reference**: [./cli/README.md](./cli/README.md)
