@@ -1,60 +1,86 @@
-# LLM Model Utility (`llm_model.py`)
-
-## File: `src/logllm/utils/llm_model.py`
+# LLM Models Module (`llm_models/`)
 
 ### Overview
 
-Defines base classes and specific implementations for interacting with Large Language Models (LLMs). This module is designed to be extensible and integrates with the project's **Modern Context Protocol (MCP)** for advanced interactions like structured output and tool use.
+The `logllm.utils.llm_models` module provides a structured and extensible framework for interacting with various Large Language Models (LLMs). It contains specific implementations for different LLM providers like Google Gemini and local Ollama instances.
+
+The module is intentionally designed to be **pluggable**. The primary reason for its architecture is to make it easy for developers to add support for new LLM providers. This is achieved by using an abstract base class, `LLMModel` (defined in `llm_abc.py`), which acts as a "contract" that all model implementations must follow.
+
+To integrate a new LLM provider, a developer simply needs to:
+
+1.  Create a new file (e.g., `anthropic_model.py`) within the `llm_models` directory.
+2.  Define a new class that inherits from `LLMModel`.
+3.  Implement the required abstract methods: `generate()`, `token_count()`, and `generate_embeddings()`. Within these methods, the developer will write the specific logic to call the new provider's API and translate its responses into the common formats defined by the base class.
+
+This design ensures that any part of the application can use any supported LLM interchangeably. It also guarantees that advanced features like structured output (`output_schema`) and tool use (`tools`), which are part of the **Modern Context Protocol (MCP)**, are handled consistently across all model implementations.
+
+### Module Structure
+
+This module is organized as a Python package with the following structure:
+
+- **`src/logllm/utils/llm_models/`**: The main package directory.
+  - **`__init__.py`**: Exposes the primary classes (`LLMModel`, `GeminiModel`, `OllamaModel`) for convenient importing.
+  - **`llm_abc.py`**: Contains the `LLMModel` abstract base class, which defines the standard interface for all model implementations.
+  - **`gemini_model.py`**: The implementation for interacting with Google's Gemini models.
+  - **`ollama_model.py`**: The implementation for interacting with models served by an Ollama instance.
+
+---
+
+## Abstract Base Class (`llm_abc.py`)
 
 ### Class: `LLMModel(ABC)`
 
-- **Purpose**: Abstract base class providing a common interface for various LLM implementations.
-- **Key Attributes**: `model`, `context_size`, `rpm_limit`, `min_request_interval`, `_last_api_call_time`.
-- **Key Methods**:
-  - **`__init__(self)`**: Initializes logger and rate limiting defaults.
-  - **`_wait_for_rate_limit(self, model_rpm: Optional[int] = None)`**: Pauses execution if the time since the last API call is less than the calculated `min_request_interval`.
-  - **`_update_last_call_time(self)`**: Updates the timestamp of the last API call.
+- **File**: `src/logllm/utils/llm_models/llm_abc.py`
+- **Purpose**: This abstract base class defines the "contract" that all LLM model implementations must follow. It ensures that any model from this module can be used interchangeably, as they all share the same core methods and properties.
+- **Key Attributes**:
+  - `model`: The underlying provider-specific model object.
+  - `context_size`: The token limit for the model's context window.
+  - `model_name`: The name of the specific LLM being used (e.g., "gemini-1.5-pro").
+- **Abstract Methods (to be implemented by subclasses)**:
   - **`generate(self, prompt_content: Union[str, ContextPayload], output_schema: Optional[Type[BaseModel]] = None, tools: Optional[List[MCPToolDefinition]] = None) -> Union[str, BaseModel, MCPToolCall, None]`**:
-    - Abstract method for generating a response from the LLM. _Must be implemented by subclasses._
-    - **Parameters**:
-      - `prompt_content`: The primary input. Can be a simple `str` or a rich `ContextPayload` from the MCP.
-      - `output_schema`: An optional Pydantic `BaseModel` to instruct the LLM to generate a structured JSON output matching this schema.
-      - `tools`: An optional list of `MCPToolDefinition`s representing functions the LLM is allowed to call.
-    - **Returns**: The response can be:
-      - A `str` for a standard text response.
-      - A Pydantic `BaseModel` instance if `output_schema` was successfully fulfilled.
-      - An `MCPToolCall` instance if the LLM decides to use one of the provided `tools`.
-      - `None` if the call fails or is blocked.
-  - **`token_count(self, text_content: str | None) -> int`**: Abstract method for counting tokens. _Must be implemented by subclasses._
-  - **`generate_embeddings(self, contents: Union[str, List[str]], ..., output_dimensionality: Optional[int] = None) -> List[List[float]]`**: Abstract method for generating embeddings. _Must be implemented by subclasses._
+    - The primary method for generating a response from the LLM.
+    - **Usage**:
+      - Pass a `str` to `prompt_content` for a simple query.
+      - Pass a `ContextPayload` object for a more complex, structured prompt.
+      - Provide a Pydantic `BaseModel` to the `output_schema` parameter to force the LLM to return a structured JSON object that matches the schema.
+      - Provide a list of `MCPToolDefinition`s to the `tools` parameter to allow the LLM to call functions.
+    - **Returns**: The response will be a `str` for plain text, a Pydantic `BaseModel` instance for structured output, an `MCPToolCall` instance if a tool is used, or `None` on failure.
+  - **`token_count(self, text_content: str | None) -> int`**:
+    - Calculates the number of tokens in a given string according to the model's specific tokenizer.
+  - **`generate_embeddings(self, contents: Union[str, List[str]], ...) -> List[List[float]]`**:
+    - Generates vector embeddings for a given string or a list of strings.
+
+---
+
+## Model Implementations
 
 ### Class: `GeminiModel(LLMModel)`
 
-- **Purpose**: Implements interaction with Google's Gemini models using the direct `google-generativeai` SDK.
-- **Key Methods**:
+- **File**: `src/logllm/utils/llm_models/gemini_model.py`
+- **Purpose**: Use this class to interact with Google's Gemini models via the `google-generativeai` SDK. It handles API authentication, rate limiting, and mapping MCP features to the Gemini API.
+- **How to Use**:
+  - **Initialization**: `model = GeminiModel(model_name="gemini-1.5-pro-latest")`. Before use, ensure the `GENAI_API_KEY` environment variable is set.
+  - **Rate Limiting**: The class automatically respects the requests-per-minute (RPM) limits for the specified Gemini model, pausing execution if necessary.
+  - **Generation (`generate`)**:
+    - Supports all features of the base class: simple prompts, `ContextPayload`, structured output via `output_schema`, and tool use via `tools`.
+    - It transparently converts Pydantic schemas and `MCPToolDefinition`s into the format required by the Gemini API.
+  - **Token Counting (`token_count`)**:
+    - Provides accurate token counts. It attempts to use a fast, local tokenizer from the `vertexai` library (if installed) and falls back to a slower API call if needed.
+  - **Embeddings (`generate_embeddings`)**:
+    - Handles texts that exceed the token limit of the embedding model (e.g., `text-embedding-004`) by automatically splitting the text into chunks, generating embeddings for each, and averaging them into a single representative vector.
+- **Utility Function**:
+  - `pydantic_to_google_tool()`: A helper function within the file that converts a Pydantic model into a `Tool` object compatible with the Gemini API. This is used internally by the `generate` method.
 
-  - **`__init__(self, model_name: str | None = None)`**:
-    - Initializes the connection to the Gemini API using `GENAI_API_KEY`.
-    - Sets model-specific rate limits (`rpm_limit`) and context size.
-  - **`token_count(self, text_content: str | None) -> int`**:
-    - Implements token counting, preferring local `vertexai` tokenization for speed and falling back to an API call.
-  - **`generate(self, prompt_content: Union[str, ContextPayload], ...)`**:
-    - Implements the core generation logic.
-    - **Handles `prompt_content`**: If it's a `ContextPayload`, it uses `ContextManager` to format it into a string for the prompt. Otherwise, it uses the provided string directly.
-    - **Handles `output_schema`**: Converts the Pydantic model into a Gemini-compatible `Tool` and instructs the model to use it for structured output. If successful, it validates and returns the Pydantic object.
-    - **Handles `tools`**: Converts the list of `MCPToolDefinition`s into Gemini-compatible `Tool`s. If the LLM's response is a function call corresponding to one of these tools, it returns an `MCPToolCall` object, which the calling code is responsible for executing.
-    - Manages the logic to parse the LLM's response and return the correct type (`str`, `BaseModel`, or `MCPToolCall`).
-  - **`generate_embeddings(self, contents: Union[str, List[str]], ...)`**:
-    - Generates embeddings for text.
-    - **Handles long texts by chunking**: If a text item exceeds the embedding model's token limit, it is automatically chunked, and the resulting embeddings are averaged to produce a single representative vector.
-    - Correctly handles empty inputs and reconstructs the output list to align with the input list.
-  - **`_mcp_tool_definitions_to_gemini_tools(...)`**: Internal helper to convert MCP tool definitions to the provider-specific format.
-  - **`_average_embeddings(...)` & `_split_text_into_chunks(...)`**: Internal helpers for the embedding process.
+### Class: `OllamaModel(LLMModel)`
 
-- **Utility Function**: **`pydantic_to_google_tool(pydantic_model: Type[BaseModel]) -> Tool`**:
-
-  - Converts a Pydantic model into a `google.ai.generativelanguage.Tool` object compatible with the Gemini API's function calling feature. Handles type mapping and schema properties.
-
-- **Constants**:
-  - `MODEL_RPM_LIMITS`: Dictionary mapping Gemini model names to their requests-per-minute limits.
-  - `EMBEDDING_MODEL_TOKEN_LIMITS`: Dictionary mapping embedding model names to their input token limits.
+- **File**: `src/logllm/utils/llm_models/ollama_model.py`
+- **Purpose**: Use this class to interact with any LLM served by a local or remote Ollama instance. This is ideal for development, testing, or using open-source models.
+- **How to Use**:
+  - **Initialization**: `model = OllamaModel(model_name="llama3", ollama_host="http://localhost:11434")`. Ensure the Ollama application is running and the specified model is pulled (`ollama pull llama3`).
+  - **Generation (`generate`)**:
+    - **Structured Output**: To get a JSON response, pass a Pydantic `BaseModel` to the `output_schema` parameter. The class will instruct Ollama to use JSON mode and then validate the response against your schema.
+    - **Tool Use**: Pass a list of `MCPToolDefinition`s to the `tools` parameter. The class converts them to the format Ollama expects and will return an `MCPToolCall` if the model decides to use a tool.
+  - **Token Counting (`token_count`)**:
+    - Provides a basic estimation by counting words. This is a fallback because the `ollama` library does not expose a model-specific tokenizer. For higher accuracy, consider using a separate tokenizer library like `tiktoken`.
+  - **Embeddings (`generate_embeddings`)**:
+    - Generates embeddings using the specified `embedding_model_name`. It calls the Ollama server's embedding endpoint for each string provided.
