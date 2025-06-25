@@ -19,7 +19,7 @@ This file defines the abstract base class `Agent` that serves as an interface fo
     - **Parameters**:
       - `typed_state`: The type definition (typically a `TypedDict`) representing the structure of the agent's state that the graph will operate on.
     - **Returns**: A compiled `langgraph` graph (`CompiledGraph` or similar).
-    - **Usage**: Subclasses like `SingleGroupParserAgent` implement this to define their multi-step logic flow.
+    - **Usage**: Subclasses like `StaticGrokParserAgent` or `ErrorSummarizerAgent` implement this to define their multi-step logic flow.
   - **`run(self)`**
     - **Type**: Abstract Method.
     - **Description**: Defines the primary synchronous execution logic for an agent. Subclasses _must_ implement this method to be runnable.

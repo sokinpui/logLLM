@@ -8,14 +8,18 @@ Welcome to the detailed documentation for the `logLLM` Command Line Interface. T
   ```bash
   python -m src.logllm <command> [subcommand/action] [OPTIONS]
   ```
+  Or, if your package is installed and has an entry point configured (e.g., `logllm`):
+  ```bash
+  logllm <command> [subcommand/action] [OPTIONS]
+  ```
 - **Help:** You can get help for any command or subcommand by appending `--help` or `-h`.
   - `python -m src.logllm --help` (for top-level commands)
   - `python -m src.logllm db --help` (for actions of the `db` command)
-  - `python -m src.logllm es-parse run --help` (for options of a specific action)
+  - `python -m src.logllm static-grok-parse run --help` (for options of a specific action)
 
 ## Global Options
 
-Before diving into specific commands, be aware of the [Global Options](./global_options.md) that can affect how `logLLM` operates, such as `--verbose` for detailed logging, and `--test` or `--json` for specifying prompt files. These options must be placed _before_ the main command.
+Before diving into specific commands, be aware of the [Global Options](./global_options.md) that can affect how `logLLM` operates, such as `--verbose` for detailed logging, and `--test` or `--json` for specifying prompt files. These options must be placed _before_ the main command name.
 
 ## Commands
 
@@ -32,27 +36,27 @@ Please select a command from the list below for detailed usage instructions and 
 
   - Scans directories, groups log files, and ingests raw log lines.
 
-- **[`parse`](./parse.md):** File-based Log Parsing.
+- **[`parse`](./parse.md):** File-based Log Parsing (Local Files to CSV).
 
   - Parses local log files using Grok patterns (LLM-assisted or user-provided).
   - Outputs structured data to CSV files.
   - Can operate on single files or groups defined by prior collection.
 
-- **[`es-parse`](./es-parse.md):** Elasticsearch-based Log Parsing.
+- **[`static-grok-parse`](./static_grok_parse.md):** Elasticsearch-based Log Parsing with Static Grok Patterns.
 
-  - `run`: Parses logs already in Elasticsearch, with LLM-assisted Grok generation/validation, and stores structured results back in ES.
-  - `list`: Lists history of previous `es-parse run` attempts.
-  - `use`: Re-runs parsing for a group using a pattern from a specific historical run.
+  - `run`: Parses logs already in Elasticsearch using Grok patterns from a YAML file. Stores structured results back in ES.
+  - `list`: Lists the parsing status for files/groups.
+  - `delete`: Deletes parsed data and status entries for specified groups.
 
-- **[`normalize-ts`](./normalize-ts.md):** Timestamp Normalization for Parsed Logs.
+- **[`normalize-ts`](./normalize_ts.md):** Timestamp Normalization for Parsed Logs in Elasticsearch.
 
-  - `run`: Processes logs from `parsed_log_*` indices, standardizes timestamps to UTC ISO 8601, and stores them in new `normalized_parsed_log_*` indices.
-  - `delete`: Deletes the `normalized_parsed_log_*` indices.
+  - `run`: Processes logs from `parsed_log_<group_name>` indices, normalizes various timestamp formats to UTC ISO 8601, and updates the `@timestamp` field in-place.
+  - `delete`: Removes the `@timestamp` field from `parsed_log_<group_name>` indices.
 
-- **[`analyze-errors`](./analyze-errors.md):** (NEW) Analyze and Summarize Error Logs from Elasticsearch.
+- **[`analyze-errors`](./analyze_errors.md):** Analyze and Summarize Error Logs from Elasticsearch.
 
-  - `run`: Executes a pipeline to filter, cluster, sample, and use an LLM to summarize error logs. Stores summaries in ES.
-  - `list`: Lists previously generated error summaries from ES.
+  - `run-summary`: Executes a pipeline to filter, cluster, sample, and use an LLM to summarize error logs. Stores summaries in ES.
+  - _(Future actions like `list-summaries` might be added to the CLI, currently available via API)_
 
 - **[`pm`](./pm.md):** Prompt Management.
   - `scan`: Scans code to update the prompt JSON file structure.

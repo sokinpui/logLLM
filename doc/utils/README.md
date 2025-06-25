@@ -8,6 +8,7 @@ This section provides detailed documentation for the various utility classes and
 - **[`data_structures.md`](./data_structures.md):** Documents the `dataclasses` used for structuring log-related data (e.g., `LineOfLogFile`, `LogFile`, `Event`).
 - **[`database_utility.md`](./database_utility.md):** Covers the `ElasticsearchDatabase` class, which provides an abstraction layer for database operations.
 - **[`llm_model.md`](./llm_model.md):** Describes base classes and specific implementations (e.g., `GeminiModel`) for interacting with Large Language Models.
+- **[`local_sentence_transformer_embedder.md`](./local_sentence_transformer_embedder.md):** (NEW) Documents the `LocalSentenceTransformerEmbedder` class for using local Sentence Transformer models to generate embeddings.
 - **[`logger_utility.md`](./logger_utility.md):** Details the singleton `Logger` class for consistent application-wide logging.
 - **[`prompts_manager_utility.md`](./prompts_manager_utility.md):** Explains the `PromptsManager` class for managing LLM prompts, including version control with Git. (For CLI usage, see `../cli/pm.md`).
 - **[`rag_manager.md`](./rag_manager.md):** Documents the `RAGManager` for managing Retrieval-Augmented Generation capabilities using Elasticsearch as a vector store.
